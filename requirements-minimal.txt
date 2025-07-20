@@ -1,0 +1,5 @@
+# Minimal requirements for SQLite testing
+Flask==2.3.3
+Flask-SQLAlchemy==3.0.5
+SQLAlchemy==1.4.53
+typing-extensions==4.7.1 

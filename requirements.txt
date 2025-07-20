@@ -1,0 +1,27 @@
+# Web Framework
+Flask==2.3.3
+Werkzeug==2.3.7
+
+# Database ORM - Using compatible versions to avoid typing conflicts
+Flask-SQLAlchemy==3.0.5
+SQLAlchemy==1.4.53
+
+# Supabase Integration
+supabase==1.2.0
+
+# HTTP Requests (used by supabase)
+requests==2.31.0
+
+# JSON Web Token handling (used by supabase)
+PyJWT==2.8.0
+
+# Typing extensions - fix for SQLAlchemy compatibility
+typing-extensions==4.7.1
+
+# Additional utilities that might be needed
+python-dotenv==1.0.0  # For environment variables
+requests==2.31.0      # For API testing in scripts
+
+# Development/Testing (optional)
+pytest==7.4.2         # For testing
+#pytest-flask==1.2.1   # Flask testing utilities 

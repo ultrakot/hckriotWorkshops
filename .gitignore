@@ -1,0 +1,128 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+
+# Flask
+instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment variables
+.env
+.env.*
+*.env
+
+# OAuth tokens and secrets - CRITICAL FOR SECURITY
+auth_token.txt
+*.token
+token_*.txt
+valid_token.txt
+access_token.txt
+refresh_token.txt
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Testing and development files
+generate_oauth_url.py
+create_test_users.py
+check_environment.py
+debug_supabase.py
+test_supabase_api.py
+get_test_token.py
+test_token_extraction.py
+
+# Test coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+.tox/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Logs
+*.log
+logs/
+debug.log
+error.log
+access.log
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*~
+
+# Documentation builds
+docs/_build/
+site/
+
+# Database backups
+*.sql
+*.dump
+backup/
+backups/
+
+# Docker
+Dockerfile.local
+docker-compose.override.yml
+.dockerignore.local
+
+# Azure deployment
+.azure/
+azure-pipelines-local.yml
+deployment.local.json
+
+# Local configuration overrides
+config.local.json
+settings.local.json
+local_settings.py
+
+# Package manager files
+.pnpm-debug.log*
+.yarn-integrity
+yarn-error.log* 
