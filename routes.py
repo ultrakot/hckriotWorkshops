@@ -1,12 +1,13 @@
-from flask import Flask, request, jsonify, abort
-from models import db, Workshop, Users, Registration, WorkshopSkill, Skill, UserSkill
-from auth import require_auth
-from urllib.parse import urlencode, urlparse, parse_qs
 import os
-import re
+from urllib.parse import urlencode, urlparse
+
+from flask import Flask, request, jsonify, abort
+
+from auth import require_auth
+from models import db, Workshop, Registration, WorkshopSkill, Skill, UserSkill
+
 
 def init_routes(app: Flask):
-    
     @app.route('/')
     def health_check():
         """API health check endpoint."""
@@ -17,7 +18,7 @@ def init_routes(app: Flask):
             'endpoints': {
                 'authentication': [
                     'GET  /auth/providers - List auth providers',
-                    'GET  /auth/config - Get auth configuration', 
+                    'GET  /auth/config - Get auth configuration',
                     'GET  /auth/google/url - Generate Google OAuth URL',
                     'POST /auth/google/url - Generate OAuth URL with custom redirect',
                     'POST /auth/extract-token - Extract token from OAuth callback URL',
@@ -30,6 +31,7 @@ def init_routes(app: Flask):
                 'workshops': [
                     'GET  /workshops - List all workshops',
                     'GET  /workshops/{id} - Get workshop details',
+                    'PATCH /workshops/{id} - Edit workshop (leader/admin)',
                     'POST /signup/{id} - Sign up for workshop',
                     'POST /cancel/{id} - Cancel registration',
                     'GET  /registration_status/{id} - Check registration status'
@@ -39,23 +41,23 @@ def init_routes(app: Flask):
                 ]
             }
         })
-    
+
     @app.route('/debug/token', methods=['POST'])
     def debug_token():
         """Debug endpoint to check JWT token format."""
         auth_header = request.headers.get('Authorization', '')
-        
+
         if not auth_header.startswith('Bearer '):
             return jsonify({
                 'error': 'Missing or invalid Authorization header',
                 'received': auth_header[:50] if auth_header else 'None'
             }), 400
-        
+
         token = auth_header.replace('Bearer ', '').strip()
-        
+
         # Analyze token structure
         parts = token.split('.')
-        
+
         return jsonify({
             'token_length': len(token),
             'token_parts': len(parts),
@@ -63,12 +65,12 @@ def init_routes(app: Flask):
             'parts_lengths': [len(part) for part in parts],
             'valid_jwt_structure': len(parts) == 3,
             'first_part_preview': parts[0][:20] if len(parts) > 0 else 'None'
-                 })
-    
+        })
+
     @app.route('/auth/google/url', methods=['GET', 'POST'])
     def get_google_oauth_url():
         """Generate Google OAuth URL for frontend authentication."""
-        
+
         # Get Supabase URL from environment
         supabase_url = os.environ.get("SUPABASE_URL")
         if not supabase_url:
@@ -76,18 +78,18 @@ def init_routes(app: Flask):
                 'error': 'Authentication service not configured',
                 'message': 'SUPABASE_URL not set'
             }), 500
-        
+
         # Get redirect URL from request (POST) or query params (GET)
         if request.method == 'POST':
             data = request.get_json() or {}
             redirect_to = data.get('redirect_to')
         else:
             redirect_to = request.args.get('redirect_to')
-        
+
         # Default redirect URL for frontend
         if not redirect_to:
             redirect_to = request.args.get('default_redirect', 'http://localhost:3000/auth/callback')
-        
+
         # Build OAuth URL
         oauth_endpoint = f"{supabase_url}/auth/v1/authorize"
         params = {
@@ -95,7 +97,7 @@ def init_routes(app: Flask):
             'redirect_to': redirect_to
         }
         oauth_url = f"{oauth_endpoint}?{urlencode(params)}"
-        
+
         return jsonify({
             'provider': 'google',
             'oauth_url': oauth_url,
@@ -108,15 +110,15 @@ def init_routes(app: Flask):
                 'step5': 'Use token in API calls: Authorization: Bearer <token>'
             }
         })
-    
+
     @app.route('/auth/providers', methods=['GET'])
     def get_auth_providers():
         """List available authentication providers."""
-        
+
         supabase_url = os.environ.get("SUPABASE_URL")
-        
+
         providers = []
-        
+
         if supabase_url:
             providers.append({
                 'name': 'google',
@@ -125,7 +127,7 @@ def init_routes(app: Flask):
                 'endpoint': '/auth/google/url',
                 'available': True
             })
-        
+
         return jsonify({
             'providers': providers,
             'count': len(providers),
@@ -135,14 +137,14 @@ def init_routes(app: Flask):
                 'custom_redirect': 'POST /auth/google/url with {"redirect_to": "your_url"}'
             }
         })
-    
+
     @app.route('/auth/config', methods=['GET'])
     def get_auth_config():
         """Get authentication configuration for frontend."""
-        
+
         supabase_url = os.environ.get("SUPABASE_URL")
         supabase_key = os.environ.get("SUPABASE_KEY")
-        
+
         return jsonify({
             'supabase_configured': bool(supabase_url and supabase_key),
             'supabase_url': supabase_url if supabase_url else None,
@@ -154,21 +156,21 @@ def init_routes(app: Flask):
                 'user_profile': '/user/profile',
                 'workshops': '/workshops'
             }
-                 })
-    
+        })
+
     @app.route('/auth/signout', methods=['POST'])
     @require_auth
     def signout():
         """Sign out the current user and invalidate their session."""
-        
+
         try:
             # Get the Supabase client
             from auth import get_supabase
             supabase = get_supabase()
-            
+
             # Sign out from Supabase (invalidates the JWT token)
             supabase.auth.sign_out()
-            
+
             return jsonify({
                 'status': 'success',
                 'message': 'Successfully signed out',
@@ -180,7 +182,7 @@ def init_routes(app: Flask):
                     ]
                 }
             })
-            
+
         except Exception as e:
             # Even if Supabase signout fails, we should tell the client to clean up
             return jsonify({
@@ -190,21 +192,21 @@ def init_routes(app: Flask):
                 'instructions': {
                     'client_cleanup': [
                         'Remove token from localStorage/sessionStorage',
-                        'Clear any user state in your app', 
+                        'Clear any user state in your app',
                         'Redirect to login page'
                     ]
                 }
             })
-    
+
     @app.route('/auth/verify', methods=['GET'])
-    @require_auth 
+    @require_auth
     def verify_token():
         """Verify if the current token is valid and return user info."""
-        
+
         user = request.local_user
         if not user:
             return jsonify({'error': 'User not found'}), 404
-            
+
         return jsonify({
             'valid': True,
             'user': {
@@ -215,12 +217,12 @@ def init_routes(app: Flask):
                 'avatar_url': user.AvatarUrl
             },
             'message': 'Token is valid'
-                 })
-    
+        })
+
     @app.route('/auth/extract-token', methods=['POST'])
     def extract_token_from_url():
         """Extract JWT token from OAuth callback URL."""
-        
+
         data = request.get_json()
         if not data or 'callback_url' not in data:
             return jsonify({
@@ -229,13 +231,13 @@ def init_routes(app: Flask):
                     'callback_url': 'http://localhost:3000/auth/callback#access_token=eyJ...&expires_in=3600'
                 }
             }), 400
-        
+
         callback_url = data['callback_url']
-        
+
         try:
             # Parse the URL
             parsed_url = urlparse(callback_url)
-            
+
             # Extract fragment (everything after #)
             fragment = parsed_url.fragment
             if not fragment:
@@ -244,27 +246,27 @@ def init_routes(app: Flask):
                     'message': 'OAuth callback URLs should contain #access_token=... in the fragment',
                     'received_url': callback_url
                 }), 400
-            
+
             # Parse fragment parameters
             fragment_params = {}
             for param in fragment.split('&'):
                 if '=' in param:
                     key, value = param.split('=', 1)
                     fragment_params[key] = value
-            
+
             # Extract tokens and metadata
             access_token = fragment_params.get('access_token')
             refresh_token = fragment_params.get('refresh_token')
             expires_in = fragment_params.get('expires_in')
             token_type = fragment_params.get('token_type', 'bearer')
-            
+
             if not access_token:
                 return jsonify({
                     'error': 'No access_token found in URL fragment',
                     'fragment_found': fragment,
                     'parsed_params': list(fragment_params.keys())
                 }), 400
-            
+
             # Validate token format (basic JWT structure check)
             if access_token.count('.') != 2:
                 return jsonify({
@@ -272,7 +274,7 @@ def init_routes(app: Flask):
                     'message': 'JWT tokens should have 3 parts separated by dots',
                     'token_parts': access_token.count('.') + 1
                 }), 400
-            
+
             # Calculate expiration time (if expires_in provided)
             expires_at = None
             if expires_in:
@@ -281,7 +283,7 @@ def init_routes(app: Flask):
                     expires_at = (datetime.utcnow() + timedelta(seconds=int(expires_in))).isoformat() + 'Z'
                 except (ValueError, TypeError):
                     pass
-            
+
             return jsonify({
                 'success': True,
                 'tokens': {
@@ -301,14 +303,14 @@ def init_routes(app: Flask):
                     'example_api_call': f'curl -H "Authorization: Bearer {access_token[:30]}..." http://localhost:5000/user/profile'
                 }
             })
-            
+
         except Exception as e:
             return jsonify({
                 'error': 'Failed to parse callback URL',
                 'message': str(e),
                 'callback_url': callback_url
             }), 500
-    
+
     @app.route('/user/profile', methods=['GET'])
     @require_auth
     def get_user_profile():
@@ -322,7 +324,7 @@ def init_routes(app: Flask):
             'CreatedDate': user.CreatedDate,
             'AvatarUrl': user.AvatarUrl
         })
-    
+
     @app.route('/workshops', methods=['GET'])
     @require_auth
     def list_workshops():
@@ -332,16 +334,16 @@ def init_routes(app: Flask):
             workshops = Workshop.query.join(WorkshopSkill).join(Skill).filter(Skill.Name.in_(skills)).all()
         else:
             workshops = Workshop.query.all()
-        
+
         result = []
         for w in workshops:
             # Count registered users (not waitlisted or cancelled)
             registered_count = Registration.query.filter_by(
-                WorkshopId=w.WorkshopId, 
+                WorkshopId=w.WorkshopId,
                 Status='Registered'
             ).count()
             vacant = w.MaxCapacity - registered_count
-            
+
             result.append({
                 'id': w.WorkshopId,
                 'title': w.Title,
@@ -353,14 +355,14 @@ def init_routes(app: Flask):
     @require_auth
     def get_workshop(w_id):
         w = Workshop.query.get_or_404(w_id)
-        
+
         # Count registered users
         registered_count = Registration.query.filter_by(
-            WorkshopId=w.WorkshopId, 
+            WorkshopId=w.WorkshopId,
             Status='Registered'
         ).count()
         vacant = w.MaxCapacity - registered_count
-        
+
         return jsonify({
             'id': w.WorkshopId,
             'title': w.Title,
@@ -372,18 +374,109 @@ def init_routes(app: Flask):
             'vacant': vacant
         })
 
+    @app.route('/workshops/<int:w_id>', methods=['PATCH'])
+    @require_auth
+    def update_workshop(w_id):
+        """Partially update a workshop: title, description, maxCapacity.
+        Requires workshop_leader role."""
+        workshop = Workshop.query.get_or_404(w_id)
+        user = request.local_user
+
+        # Authorization: User must be admin or leader for this workshop
+        if not user.can_manage_workshop(w_id):
+            return jsonify({
+                'error': 'Forbidden',
+                'message': 'You do not have permission to edit this workshop.'
+            }), 403
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Bad Request', 'message': 'No JSON data provided.'}), 400
+
+        updated_fields = []
+
+        # title
+        if 'title' in data:
+            if not isinstance(data['title'], str) or not data['title'].strip():
+                return jsonify({'error': 'Bad Request', 'message': 'Title must be a non-empty string.'}), 400
+
+            workshop.Title = data['title'].strip()
+            updated_fields.append('title')
+
+        # description
+        if 'description' in data:
+            if not isinstance(data.get('description'), str):
+                return jsonify({'error': 'Bad Request', 'message': 'Description must be a string.'}), 400
+
+            workshop.Description = data['description']
+            updated_fields.append('description')
+
+        # capacity
+        if 'capacity' in data:
+            curr_capacity = workshop.MaxCapacity
+            new_capacity = data['capacity']
+            if not isinstance(new_capacity, int) or new_capacity < 0:
+                return jsonify({
+                    'error': 'Bad Request',
+                    'message': 'Capacity must be a non-negative integer.'
+                }), 400
+
+            registered_count = _get_registered_count(w_id)
+
+            if new_capacity < 0:
+                return jsonify({
+                    'error': 'Bad Request',
+                    'message': 'Capacity must be at least 0.'
+                }), 400
+
+            # case: new capacity < current registrations
+            if new_capacity < registered_count:
+                diff = registered_count - new_capacity
+                canceled_user_ids = _remove_participants_from_workshop(w_id=w_id, num_participants=diff)
+                if not canceled_user_ids:
+                    return jsonify({
+                        'error': 'Internal Server Error',
+                        'message': 'New capacity is lower than current registrations. Failed to remove participants.'
+                    }), 500
+
+                _update_removed_participants(w_id, canceled_user_ids)
+
+            if new_capacity > curr_capacity:
+                _update_waitlisted_participants(w_id)
+
+            workshop.MaxCapacity = new_capacity
+            updated_fields.append('capacity')
+
+        if not updated_fields:
+            return jsonify({
+                'error': 'Bad Request',
+                'message': 'No updatable fields provided ("title", "description", "capacity").'
+            }), 400
+
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Workshop updated successfully.',
+            'updated_fields': updated_fields,
+            'workshop': {
+                'id': workshop.WorkshopId,
+                'title': workshop.Title,
+                'description': workshop.Description
+            }
+        })
+
     @app.route('/signup/<int:w_id>', methods=['POST'])
     @require_auth
     def signup(w_id):
         w = Workshop.query.get_or_404(w_id)
         user_id = request.local_user.UserId
-        
+
         # Check for any existing registration (any status)
         existing_registration = Registration.query.filter_by(
-            UserId=user_id, 
+            UserId=user_id,
             WorkshopId=w_id
         ).first()
-        
+
         # If user is already registered or waitlisted, prevent duplicate signup
         if existing_registration and existing_registration.Status in ['Registered', 'Waitlisted']:
             return jsonify({
@@ -391,13 +484,10 @@ def init_routes(app: Flask):
                 'current_status': existing_registration.Status,
                 'registered_at': existing_registration.RegisteredAt
             }), 400
-        
+
         # Count current active registrations
-        registered_count = Registration.query.filter_by(
-            WorkshopId=w_id, 
-            Status='Registered'
-        ).count()
-        
+        registered_count = _get_registered_count(w_id)
+
         # Determine new status based on capacity
         if registered_count >= w.MaxCapacity:
             new_status = 'Waitlisted'
@@ -405,7 +495,7 @@ def init_routes(app: Flask):
         else:
             new_status = 'Registered'
             message = 'Signed up successfully'
-        
+
         if existing_registration:
             # Reuse existing cancelled registration
             existing_registration.Status = new_status
@@ -414,13 +504,13 @@ def init_routes(app: Flask):
         else:
             # Create new registration
             existing_registration = Registration(
-                UserId=user_id, 
+                UserId=user_id,
                 WorkshopId=w_id,
                 Status=new_status
             )
             db.session.add(existing_registration)
             action = "Registered"
-        
+
         db.session.commit()
         return jsonify({
             'status': message,
@@ -432,37 +522,37 @@ def init_routes(app: Flask):
     @require_auth
     def cancel(w_id):
         registration = Registration.query.filter_by(
-            UserId=request.local_user.UserId, 
+            UserId=request.local_user.UserId,
             WorkshopId=w_id
         ).filter(Registration.Status.in_(['Registered', 'Waitlisted'])).first_or_404()
-        
+
         old_status = registration.Status
         registration.Status = 'Cancelled'
         db.session.commit()
-        
+
         return jsonify({
             'status': 'Cancelled',
             'previous_status': old_status,
             'cancelled_at': registration.RegisteredAt  # This gets updated when cancelled
         })
-    
+
     @app.route('/registration_status/<int:w_id>', methods=['GET'])
     @require_auth
     def get_registration_status(w_id):
         """Get user's current registration status for a workshop."""
         user_id = request.local_user.UserId
-        
+
         registration = Registration.query.filter_by(
             UserId=user_id,
             WorkshopId=w_id
         ).first()
-        
+
         if not registration:
             return jsonify({
                 'registered': False,
                 'status': 'Not registered'
             })
-        
+
         return jsonify({
             'registered': True,
             'status': registration.Status,
@@ -475,10 +565,7 @@ def init_routes(app: Flask):
     @require_auth
     def vacant(w_id):
         w = Workshop.query.get_or_404(w_id)
-        registered_count = Registration.query.filter_by(
-            WorkshopId=w_id, 
-            Status='Registered'
-        ).count()
+        registered_count = _get_registered_count(w_id)
         vacant = w.MaxCapacity - registered_count
         return jsonify({'vacant': vacant})
 
@@ -493,11 +580,11 @@ def init_routes(app: Flask):
     @require_auth
     def by_user_skills():
         user_id = request.local_user.UserId
-        
+
         # Find workshops where user has all required skills
         # Get user's skills
         user_skills = db.session.query(UserSkill.SkillId).filter(UserSkill.UserId == user_id).subquery()
-        
+
         # Get workshops where all required skills are in user's skills
         workshop_ids = db.session.query(Workshop.WorkshopId).outerjoin(
             WorkshopSkill, Workshop.WorkshopId == WorkshopSkill.WorkshopId
@@ -506,6 +593,50 @@ def init_routes(app: Flask):
         ).group_by(Workshop.WorkshopId).having(
             db.func.count(WorkshopSkill.SkillId) == db.func.count(user_skills.c.SkillId)
         ).subquery()
-        
+
         workshops = Workshop.query.filter(Workshop.WorkshopId.in_(workshop_ids)).all()
-        return jsonify([{'id': w.WorkshopId, 'title': w.Title} for w in workshops]) 
+        return jsonify([{'id': w.WorkshopId, 'title': w.Title} for w in workshops])
+
+
+######## helper functions
+
+def _get_registered_count(w_id):
+    registered_count = Registration.query.filter_by(
+        WorkshopId=w_id,
+        Status='Registered'
+    ).count()
+    return registered_count
+
+
+def _remove_participants_from_workshop(w_id, num_participants):
+    """remove participants due to capacity limit, lifo.
+    returns user_ids of cancelled registrations
+    """
+    cancelled_registrations = Registration.query.filter_by(
+        WorkshopId=w_id,
+        Status='Registered'
+    ).order_by(Registration.RegisteredAt.desc()).limit(num_participants).all()
+
+    for reg in cancelled_registrations:
+        reg.Status = 'Cancelled'
+
+    # note: email is sent to participant in another function
+    user_ids = [reg.UserId for reg in cancelled_registrations]
+
+    db.session.commit()
+
+    return user_ids
+
+
+def _update_waitlisted_participants(w_id):
+    """email waitlisted participants of workshop (if any):
+      capacity+, can now register"""
+    # TODO
+    pass
+
+
+def _update_removed_participants(w_id, canceled_user_ids):
+    """email removed participants of workshop:
+    capacity-, registration canceled"""
+    # TODO
+    pass
