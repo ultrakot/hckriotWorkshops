@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from app import create_app
-from models import db, Users, Workshop, WorkshopLeader, Registration, UserRole, RegistrationStatus
+from models import db, Users, Workshop, WorkshopLeader, Registration, UserRole, RegistrationStatus, Skill, UserSkill
 
 FAKE_JWT = 'fake.jwt.token'
 
@@ -44,25 +44,42 @@ def init_database(app):
         # Create Users with different roles
         admin_user = Users(UserId=1, Name='Admin User', Email='admin@test.com', Role=UserRole.ADMIN)
         leader_user = Users(UserId=2, Name='Leader User', Email='leader@test.com', Role=UserRole.WORKSHOP_LEADER)
-        participant_user1 = Users(Name='Participant User 1 ', Email='participant1@test.com', Role=UserRole.PARTICIPANT)
-        participant_user2 = Users(Name='Participant User 2', Email='participant2@test.com')
-        db.session.add_all([admin_user, leader_user, participant_user1, participant_user2])
+        participant_user1 = Users(UserId=3, Name='Participant User 1', Email='participant1@test.com', Role=UserRole.PARTICIPANT)
+        participant_user2 = Users(UserId=4, Name='Participant User 2', Email='participant2@test.com', Role=UserRole.PARTICIPANT)
+        db.session.add_all([admin_user, leader_user, participant_user1])
         db.session.flush()
+
+        # Create Skills
+        skill_py = Skill(Name='python')
+        skill_js = Skill(Name='javascript')
+        db.session.add(skill_py)
+        db.session.add(skill_js)
+        db.session.flush()
+
+        # Assign skill to user
+        user_skill = UserSkill(UserId=participant_user1.UserId, SkillId=skill_py.SkillId, Grade=1)
+        db.session.add(user_skill)
 
         # Create Workshops
         workshop1 = Workshop(WorkshopId=1, Title='workshop1 init', Description='A beginner workshop.', MaxCapacity=10,
                              SessionDate='2024-10-26', StartTime='10:00:00', DurationMin=120)
-        workshop2 = Workshop(WorkshopId=2, Title='workshop2 init', Description='A deep-dive workshop.', MaxCapacity=5,
+        workshop2 = Workshop(WorkshopId=2, Title='workshop2 init', Description='A deep-dive workshop.', MaxCapacity=1,
                              SessionDate='2024-10-27', StartTime='14:00:00', DurationMin=180)
-        db.session.add_all([workshop1, workshop2])
+        workshop3 = Workshop(WorkshopId=3, Title='workshop3 init', Description='workshop3 description.', MaxCapacity=15,
+                             SessionDate='2024-10-27', StartTime='16:00:00', DurationMin=120)
+        db.session.add_all([workshop1, workshop2, workshop3])
+        db.session.flush()
 
         # Assign leader to first workshop
-        leader_assignment = WorkshopLeader(WorkshopId=1, LeaderId=2)
+        leader_assignment = WorkshopLeader(WorkshopId=workshop1.WorkshopId, LeaderId=leader_user.UserId)
         db.session.add(leader_assignment)
 
-        # Add a registration to the first workshop to test capacity logic
-        registration = Registration(WorkshopId=1, UserId=3, Status=RegistrationStatus.REGISTERED)
-        db.session.add(registration)
+        # Add registrations for the participant
+        # participant_user1
+        reg1 = Registration(WorkshopId=workshop1.WorkshopId, UserId=participant_user1.UserId, Status=RegistrationStatus.REGISTERED)
+        reg2 = Registration(WorkshopId=workshop2.WorkshopId, UserId=participant_user1.UserId, Status=RegistrationStatus.WAITLISTED)
+        reg3 = Registration(WorkshopId=workshop3.WorkshopId, UserId=participant_user1.UserId, Status=RegistrationStatus.REGISTERED)
+        db.session.add_all([reg1, reg2, reg3])
 
         db.session.commit()
         yield db
@@ -280,3 +297,41 @@ class TestWorkshopLeadership:
         participant = Users.query.filter_by(Email='participant1@test.com').one()
         assert not participant.is_workshop_leader_for(workshop_id=1)
         assert not participant.can_manage_workshop(workshop_id=1)
+
+class TestUserProfile:
+    """Tests the user profile endpoint."""
+
+    @patch('auth.get_supabase')
+    def test_get_user_profile_details(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a user is authenticated and has registrations and skills
+        WHEN they request their profile
+        THEN the profile should contain correct workshop and skill information.
+        """
+        # Arrange: Authenticate as the participant user
+        participant = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, participant)
+
+        # Act: Call the user profile endpoint
+        response = client.get('/user/profile', headers={'Authorization': f'Bearer {FAKE_JWT}'})
+
+        # Assert
+        assert response.status_code == 200
+        profile_data = response.get_json()
+
+        # Check basic user info
+        assert profile_data['UserId'] == participant.UserId
+        assert profile_data['Email'] == 'participant1@test.com'
+
+        # Check workshops
+        assert 'workshops' in profile_data
+        assert profile_data['workshops']['registered'] == [1, 3]
+        assert profile_data['workshops']['waitlisted'] == [2]
+
+        # Check skills
+        assert 'skills' in profile_data
+        assert len(profile_data['skills']) == 1
+        skill_data = profile_data['skills'][0]
+        assert skill_data['name'] == 'python'
+        assert skill_data['grade'] == 1
+        assert isinstance(skill_data['id'], int)

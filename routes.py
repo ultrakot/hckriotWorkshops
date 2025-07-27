@@ -42,6 +42,9 @@ def init_routes(app: Flask):
             }
         })
 
+    #########################  auth
+    #########################################################################
+
     @app.route('/debug/token', methods=['POST'])
     def debug_token():
         """Debug endpoint to check JWT token format."""
@@ -311,19 +314,50 @@ def init_routes(app: Flask):
                 'callback_url': callback_url
             }), 500
 
+    #########################  user profile
+    #########################################################################
+
     @app.route('/user/profile', methods=['GET'])
     @require_auth
     def get_user_profile():
         user = request.local_user
         if not user:
             return jsonify({'error': 'User not found'}), 404
+
+        # workshops
+        registered_workshop_ids = []
+        waitlisted_workshop_ids = []
+        for reg in user.registrations:
+            if reg.Status == RegistrationStatus.REGISTERED:
+                registered_workshop_ids.append(reg.WorkshopId)
+            elif reg.Status == RegistrationStatus.WAITLISTED:
+                waitlisted_workshop_ids.append(reg.WorkshopId)
+
+        # skills
+        skills_data = [
+            {
+                'id': user_skill.skill.SkillId,
+                'name': user_skill.skill.Name,
+                'grade': user_skill.Grade
+            }
+            for user_skill in user.skills
+        ]
+
         return jsonify({
             'UserId': user.UserId,
             'Name': user.Name,
             'Email': user.Email,
             'CreatedDate': user.CreatedDate,
-            'AvatarUrl': user.AvatarUrl
+            'AvatarUrl': user.AvatarUrl,
+            'workshops': {
+                'registered': registered_workshop_ids,
+                'waitlisted': waitlisted_workshop_ids
+            },
+            'skills': skills_data
         })
+
+    #########################  workshops
+    #########################################################################
 
     @app.route('/workshops', methods=['GET'])
     @require_auth
@@ -478,7 +512,8 @@ def init_routes(app: Flask):
         ).first()
 
         # If user is already registered or waitlisted, prevent duplicate signup
-        if existing_registration and existing_registration.Status in [RegistrationStatus.REGISTERED, RegistrationStatus.WAITLISTED]:
+        if existing_registration and existing_registration.Status in [RegistrationStatus.REGISTERED,
+                                                                      RegistrationStatus.WAITLISTED]:
             return jsonify({
                 'error': 'Already signed up',
                 'current_status': existing_registration.Status,

@@ -89,7 +89,7 @@ class UserSkill(db.Model):
 
     # Relationships
     user = db.relationship('Users', back_populates='skills')
-    skill = db.relationship('Skill', back_populates='user_skills')
+    skill = db.relationship('Skill', back_populates='user_skills', lazy='joined')
 
 
 class Workshop(db.Model):
