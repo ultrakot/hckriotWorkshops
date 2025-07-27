@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -44,8 +45,10 @@ def init_database(app):
         # Create Users with different roles
         admin_user = Users(UserId=1, Name='Admin User', Email='admin@test.com', Role=UserRole.ADMIN)
         leader_user = Users(UserId=2, Name='Leader User', Email='leader@test.com', Role=UserRole.WORKSHOP_LEADER)
-        participant_user1 = Users(UserId=3, Name='Participant User 1', Email='participant1@test.com', Role=UserRole.PARTICIPANT)
-        participant_user2 = Users(UserId=4, Name='Participant User 2', Email='participant2@test.com', Role=UserRole.PARTICIPANT)
+        participant_user1 = Users(UserId=3, Name='Participant User 1', Email='participant1@test.com',
+                                  Role=UserRole.PARTICIPANT)
+        participant_user2 = Users(UserId=4, Name='Participant User 2', Email='participant2@test.com',
+                                  Role=UserRole.PARTICIPANT)
         db.session.add_all([admin_user, leader_user, participant_user1])
         db.session.flush()
 
@@ -61,12 +64,13 @@ def init_database(app):
         db.session.add(user_skill)
 
         # Create Workshops
+        w_date = date(2025, 9, 1)
         workshop1 = Workshop(WorkshopId=1, Title='workshop1 init', Description='A beginner workshop.', MaxCapacity=10,
-                             SessionDate='2024-10-26', StartTime='10:00:00', DurationMin=120)
+                             SessionDate=w_date, StartTime='10:00:00', DurationMin=120)
         workshop2 = Workshop(WorkshopId=2, Title='workshop2 init', Description='A deep-dive workshop.', MaxCapacity=1,
-                             SessionDate='2024-10-27', StartTime='14:00:00', DurationMin=180)
+                             SessionDate=w_date, StartTime='14:00:00', DurationMin=180)
         workshop3 = Workshop(WorkshopId=3, Title='workshop3 init', Description='workshop3 description.', MaxCapacity=15,
-                             SessionDate='2024-10-27', StartTime='16:00:00', DurationMin=120)
+                             SessionDate=w_date, StartTime='16:00:00', DurationMin=120)
         db.session.add_all([workshop1, workshop2, workshop3])
         db.session.flush()
 
@@ -76,9 +80,12 @@ def init_database(app):
 
         # Add registrations for the participant
         # participant_user1
-        reg1 = Registration(WorkshopId=workshop1.WorkshopId, UserId=participant_user1.UserId, Status=RegistrationStatus.REGISTERED)
-        reg2 = Registration(WorkshopId=workshop2.WorkshopId, UserId=participant_user1.UserId, Status=RegistrationStatus.WAITLISTED)
-        reg3 = Registration(WorkshopId=workshop3.WorkshopId, UserId=participant_user1.UserId, Status=RegistrationStatus.REGISTERED)
+        reg1 = Registration(WorkshopId=workshop1.WorkshopId, UserId=participant_user1.UserId,
+                            Status=RegistrationStatus.REGISTERED)
+        reg2 = Registration(WorkshopId=workshop2.WorkshopId, UserId=participant_user1.UserId,
+                            Status=RegistrationStatus.WAITLISTED)
+        reg3 = Registration(WorkshopId=workshop3.WorkshopId, UserId=participant_user1.UserId,
+                            Status=RegistrationStatus.REGISTERED)
         db.session.add_all([reg1, reg2, reg3])
 
         db.session.commit()
@@ -113,7 +120,8 @@ class TestEditWorkshop:
 
     @patch('routes._update_waitlisted_participants')
     @patch('auth.get_supabase')
-    def test_workshop_leader_can_edit_own_workshop(self, mock_get_supabase, mock_update_waitlisted, client, init_database):
+    def test_workshop_leader_can_edit_own_workshop(self, mock_get_supabase, mock_update_waitlisted, client,
+                                                   init_database):
         """
         GIVEN a workshop leader is authenticated
         WHEN they send a PATCH request to a workshop they lead
@@ -151,7 +159,6 @@ class TestEditWorkshop:
 
         # called because capacity increased
         mock_update_waitlisted.assert_called_once_with(workshop_id)
-
 
     @patch('auth.get_supabase')
     def test_workshop_leader_cannot_edit_other_workshop(self, mock_get_supabase, client, init_database):
@@ -297,6 +304,108 @@ class TestWorkshopLeadership:
         participant = Users.query.filter_by(Email='participant1@test.com').one()
         assert not participant.is_workshop_leader_for(workshop_id=1)
         assert not participant.can_manage_workshop(workshop_id=1)
+
+
+class TestCreateWorkshop:
+    """Tests for the POST /workshops endpoint."""
+
+    @patch('auth.get_supabase')
+    def test_admin_can_create_workshop(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an admin user is authenticated
+        WHEN they send a POST request with valid data
+        THEN a new workshop should be created and returned with status 201.
+        """
+        # Arrange
+        admin_user = db.session.get(Users, 1)
+        mock_authed_user(mock_get_supabase, admin_user)
+
+        workshop_data = {
+            "title": "New Advanced Workshop",
+            "description": "A new advanced workshop.",
+            "session_date": "2025-11-15",
+            "start_time": "09:00:00",
+            "duration_min": 180,
+            "capacity": 20
+        }
+
+        # Act
+        response = client.post(
+            '/workshops',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'},
+            data=json.dumps(workshop_data),
+            content_type='application/json'
+        )
+
+        # Assert
+        assert response.status_code == 201
+        response_data = response.get_json()
+        assert response_data['message'] == 'Workshop created successfully.'
+        assert response_data['workshop']['title'] == "New Advanced Workshop"
+        assert response_data['workshop']['capacity'] == 20
+
+        # Verify it's in the database
+        new_workshop = Workshop.query.get(response_data['workshop']['id'])
+        assert new_workshop is not None
+        assert new_workshop.Title == "New Advanced Workshop"
+
+    @patch('auth.get_supabase')
+    def test_non_admin_cannot_create_workshop(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a non-admin user (leader or participant) is authenticated
+        WHEN they attempt to create a workshop
+        THEN they should receive a 403 Forbidden error.
+        """
+        # Arrange
+        leader_user = db.session.get(Users, 2)
+        participant_user = db.session.get(Users, 3)
+
+        workshop_data = {"title": "Unauthorized Workshop", "session_date": "2025-01-01", "start_time": "12:00:00",
+                         "duration_min": 60, "capacity": 5}
+
+        # Act & Assert for Workshop Leader
+        mock_authed_user(mock_get_supabase, leader_user)
+        response_leader = client.post('/workshops', headers={'Authorization': f'Bearer {FAKE_JWT}'},
+                                      data=json.dumps(workshop_data), content_type='application/json')
+        assert response_leader.status_code == 403
+
+        # Act & Assert for Participant
+        mock_authed_user(mock_get_supabase, participant_user)
+        response_participant = client.post('/workshops', headers={'Authorization': f'Bearer {FAKE_JWT}'},
+                                           data=json.dumps(workshop_data), content_type='application/json')
+        assert response_participant.status_code == 403
+
+    @patch('auth.get_supabase')
+    def test_create_workshop_with_invalid_data(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an admin user is authenticated
+        WHEN they send a POST request with invalid or missing data
+        THEN they should receive a 400 Bad Request error.
+        """
+        admin_user = db.session.get(Users, 1)
+        mock_authed_user(mock_get_supabase, admin_user)
+
+        invalid_payloads = [
+            ({}, "data"),  # Empty payload
+            ({"title": "Incomplete"}, "required fields"),  # Missing fields
+            ({"title": "", "session_date": "2025-11-15", "start_time": "09:00:00", "duration_min": 180, "capacity": 20},
+             "non-empty string"),
+            ({"title": "Bad Date", "session_date": "15-11-2025", "start_time": "09:00:00", "duration_min": 180,
+              "capacity": 20}, "YYYY-MM-DD format"),
+            ({"title": "Bad Time", "session_date": "2025-11-15", "start_time": "9am", "duration_min": 180,
+              "capacity": 20}, "HH:MM:SS format"),
+            ({"title": "Bad Duration", "session_date": "2025-11-15", "start_time": "09:00:00", "duration_min": -10,
+              "capacity": 20}, "positive integer"),
+            ({"title": "Bad Capacity", "session_date": "2025-11-15", "start_time": "09:00:00", "duration_min": 180,
+              "capacity": "twenty"}, "non-negative integer"),
+        ]
+
+        for payload, error_message in invalid_payloads:
+            response = client.post('/workshops', headers={'Authorization': f'Bearer {FAKE_JWT}'},
+                                   data=json.dumps(payload), content_type='application/json')
+            assert response.status_code == 400, f"Failed for payload: {payload}"
+            assert error_message in response.get_json()['message'], f"Failed for payload: {payload}"
+
 
 class TestUserProfile:
     """Tests the user profile endpoint."""

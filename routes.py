@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from urllib.parse import urlencode, urlparse
 
 from flask import Flask, request, jsonify, abort
@@ -29,6 +30,7 @@ def init_routes(app: Flask):
                     'GET  /user/profile - Get authenticated user profile'
                 ],
                 'workshops': [
+                    'POST /workshops - Create a new workshop',
                     'GET  /workshops - List all workshops',
                     'GET  /workshops/{id} - Get workshop details',
                     'PATCH /workshops/{id} - Edit workshop (leader/admin)',
@@ -401,12 +403,87 @@ def init_routes(app: Flask):
             'id': w.WorkshopId,
             'title': w.Title,
             'description': w.Description,
-            'date': w.SessionDate,
+            'date': w.SessionDate.isoformat(),
             'time': w.StartTime,
             'duration_mins': w.DurationMin,
             'capacity': w.MaxCapacity,
             'vacant': vacant
         })
+
+    @app.route('/workshops', methods=['POST'])
+    @require_auth
+    def create_workshop():
+        """Create new workshop. Requires ADMIN role."""
+        user = request.local_user
+        if not user.is_admin():
+            return jsonify({
+                'error': 'Forbidden',
+                'message': 'You do not have permission to create a workshop.'
+            }), 403
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Bad Request', 'message': 'No JSON data provided.'}), 400
+
+        # --- Data Validation ---
+        required_fields = ['title', 'start_time', 'session_date', 'duration_min', 'capacity']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify({
+                'error': 'Bad Request',
+                'message': f'Missing required fields: {", ".join(missing_fields)}'
+            }), 400
+
+        title = data.get('title')
+        description = data.get('description','')  # Optional in model
+        session_date_str = data.get('session_date')
+        start_time_str = data.get('start_time')
+        duration_min = data.get('duration_min')
+        capacity = data.get('capacity')
+
+        # Validate
+        if not isinstance(title, str) or not title.strip():
+            return jsonify({'error': 'Bad Request', 'message': 'Title must be a non-empty string.'}), 400
+        if description and not isinstance(description, str):
+            return jsonify({'error': 'Bad Request', 'message': 'Description must be a string.'}), 400
+        if not isinstance(duration_min, int) or duration_min <= 0:
+            return jsonify({'error': 'Bad Request', 'message': 'Duration must be a positive integer.'}), 400
+        if not isinstance(capacity, int) or capacity <= 0:
+            return jsonify({'error': 'Bad Request', 'message': 'Capacity must be a non-negative integer.'}), 400
+
+        try:
+            session_date = datetime.strptime(session_date_str, '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Bad Request', 'message': 'session_date must be in YYYY-MM-DD format.'}), 400
+        try:
+            datetime.strptime(start_time_str, '%H:%M:%S')
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Bad Request', 'message': 'start_time must be in HH:MM:SS format.'}), 400
+
+        # --- Create Workshop ---
+        new_workshop = Workshop(
+            Title=title.strip(),
+            Description=description,
+            SessionDate=session_date,
+            StartTime=start_time_str,
+            DurationMin=duration_min,
+            MaxCapacity=capacity
+        )
+        db.session.add(new_workshop)
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Workshop created successfully.',
+            'workshop': {
+                'id': new_workshop.WorkshopId,
+                'title': new_workshop.Title,
+                'description': new_workshop.Description,
+                'session_date': new_workshop.SessionDate.isoformat(),
+                'start_time': new_workshop.StartTime,
+                'duration_min': new_workshop.DurationMin,
+                'capacity': new_workshop.MaxCapacity
+            }
+        }), 201
 
     @app.route('/workshops/<int:w_id>', methods=['PATCH'])
     @require_auth
@@ -416,7 +493,6 @@ def init_routes(app: Flask):
         workshop = Workshop.query.get_or_404(w_id)
         user = request.local_user
 
-        # Authorization: User must be admin or leader for this workshop
         if not user.can_manage_workshop(w_id):
             return jsonify({
                 'error': 'Forbidden',
@@ -425,43 +501,29 @@ def init_routes(app: Flask):
 
         data = request.get_json()
         if not data:
-            return jsonify({'error': 'Bad Request', 'message': 'No JSON data provided.'}), 400
+            return jsonify({'error': 'Bad Request', 'message': 'No data provided.'}), 400
 
         updated_fields = []
 
-        # title
         if 'title' in data:
             if not isinstance(data['title'], str) or not data['title'].strip():
                 return jsonify({'error': 'Bad Request', 'message': 'Title must be a non-empty string.'}), 400
-
             workshop.Title = data['title'].strip()
             updated_fields.append('title')
 
-        # description
         if 'description' in data:
             if not isinstance(data.get('description'), str):
                 return jsonify({'error': 'Bad Request', 'message': 'Description must be a string.'}), 400
-
             workshop.Description = data['description']
             updated_fields.append('description')
 
-        # capacity
         if 'capacity' in data:
             curr_capacity = workshop.MaxCapacity
             new_capacity = data['capacity']
-            if not isinstance(new_capacity, int) or new_capacity < 0:
-                return jsonify({
-                    'error': 'Bad Request',
-                    'message': 'Capacity must be a non-negative integer.'
-                }), 400
+            if not isinstance(new_capacity, int) or (new_capacity < 0):
+                return jsonify({'error': 'Bad Request', 'message': 'Capacity must be a non-negative integer.'}), 400
 
             registered_count = _get_registered_count(w_id)
-
-            if new_capacity < 0:
-                return jsonify({
-                    'error': 'Bad Request',
-                    'message': 'Capacity must be at least 0.'
-                }), 400
 
             # case: new capacity < current registrations
             if new_capacity < registered_count:
@@ -495,7 +557,8 @@ def init_routes(app: Flask):
             'workshop': {
                 'id': workshop.WorkshopId,
                 'title': workshop.Title,
-                'description': workshop.Description
+                'description': workshop.Description,
+                'capacity': workshop.MaxCapacity
             }
         })
 
