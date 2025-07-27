@@ -34,9 +34,11 @@ def init_routes(app: Flask):
                     'GET  /workshops - List all workshops',
                     'GET  /workshops/{id} - Get workshop details',
                     'PATCH /workshops/{id} - Edit workshop (leader/admin)',
-                    'POST /signup/{id} - Sign up for workshop',
-                    'POST /cancel/{id} - Cancel registration',
-                    'GET  /registration_status/{id} - Check registration status'
+
+                    # user registration
+                    'POST   /workshops/{id}/register  - Register (sign up) for a workshop',
+                    'DELETE /workshops/{id}/register  - Cancel registration',
+                    'GET    /workshops/{id}/registration_status  - Get current user registration status'
                 ],
                 'debug': [
                     'POST /debug/token - Debug JWT token format'
@@ -562,9 +564,9 @@ def init_routes(app: Flask):
             }
         })
 
-    @app.route('/signup/<int:w_id>', methods=['POST'])
+    @app.route('/workshops/<int:w_id>/register', methods=['POST'])
     @require_auth
-    def signup(w_id):
+    def register_to_workshop(w_id):
         w = Workshop.query.get_or_404(w_id)
         user_id = request.local_user.UserId
 
@@ -616,9 +618,9 @@ def init_routes(app: Flask):
             'workshop_status': new_status
         })
 
-    @app.route('/cancel/<int:w_id>', methods=['POST'])
+    @app.route('/workshops/<int:w_id>/register', methods=['DELETE'])
     @require_auth
-    def cancel(w_id):
+    def unregister_to_workshop(w_id):
         registration = Registration.query.filter_by(
             UserId=request.local_user.UserId,
             WorkshopId=w_id
@@ -634,7 +636,7 @@ def init_routes(app: Flask):
             'cancelled_at': registration.RegisteredAt  # This gets updated when cancelled
         })
 
-    @app.route('/registration_status/<int:w_id>', methods=['GET'])
+    @app.route('/workshops/<int:w_id>/registration_status', methods=['GET'])
     @require_auth
     def get_registration_status(w_id):
         """Get user's current registration status for a workshop."""
@@ -652,11 +654,9 @@ def init_routes(app: Flask):
             })
 
         return jsonify({
-            'registered': True,
             'status': registration.Status,
-            'registered_at': registration.RegisteredAt,
-            'can_cancel': registration.Status in [RegistrationStatus.REGISTERED, RegistrationStatus.WAITLISTED],
-            'can_signup': registration.Status == RegistrationStatus.CANCELLED
+            'is_registered': registration.Status == RegistrationStatus.REGISTERED,
+            'registered_at': registration.RegisteredAt
         })
 
     @app.route('/vacant/<int:w_id>', methods=['GET'])
