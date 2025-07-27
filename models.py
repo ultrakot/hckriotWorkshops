@@ -4,23 +4,35 @@ import enum
 db = SQLAlchemy()
 
 
-class UserRole(enum.Enum):
-    ADMIN = ('admin', 3)
-    WORKSHOP_LEADER = ('workshop_leader', 2)
-    PARTICIPANT = ('participant', 1)
+class UserRole(str, enum.Enum):
+    ADMIN = 'ADMIN'
+    WORKSHOP_LEADER = 'WORKSHOP_LEADER'
+    PARTICIPANT = 'PARTICIPANT'
 
-    def __init__(self, role_name, level):
-        self.role_name = role_name
-        self.level = level
+    @property
+    def level(self) -> int:
+        """Returns the level for the role."""
+        # A mapping of role members to their integer level.
+        level_map = {
+            UserRole.ADMIN: 100,
+            UserRole.WORKSHOP_LEADER: 2,
+            UserRole.PARTICIPANT: 1
+        }
+        return level_map[self]
 
     def __ge__(self, other):
+        """Enable hierarchical comparison (e.g., ADMIN >= PARTICIPANT)."""
+        if self.__class__ is not other.__class__:
+            return NotImplemented
         return self.level >= other.level
 
-class RegistrationStatus(enum.Enum):
+
+class RegistrationStatus(str, enum.Enum):
     """possible statuses for a workshop registration."""
     REGISTERED = 'Registered'
     WAITLISTED = 'Waitlisted'
     CANCELLED = 'Cancelled'
+
 
 class Users(db.Model):
     __tablename__ = 'Users'
@@ -28,6 +40,14 @@ class Users(db.Model):
     Name = db.Column(db.Text, nullable=False)
     Email = db.Column(db.Text, unique=True, nullable=False)
     Role = db.Column(db.Enum(UserRole), nullable=False, default=UserRole.PARTICIPANT)
+    CreatedDate = db.Column(db.Text, nullable=False, default=db.text("datetime('now')"))
+    SupabaseId = db.Column(db.Text, unique=True, nullable=True)  # For Supabase integration
+    AvatarUrl = db.Column(db.Text, nullable=True)  # For Google profile pictures
+
+    # Relationships
+    registrations = db.relationship('Registration', back_populates='user')
+    skills = db.relationship('UserSkill', back_populates='user')
+    led_workshops = db.relationship('WorkshopLeader', back_populates='leader')
 
     # Role checking methods
     def has_role_level(self, min_role):
@@ -59,15 +79,6 @@ class Users(db.Model):
         return db.session.query(Workshop).join(WorkshopLeader).filter(
             WorkshopLeader.LeaderId == self.UserId
         ).all()
-
-    CreatedDate = db.Column(db.Text, nullable=False, default=db.text("datetime('now')"))
-    SupabaseId = db.Column(db.Text, unique=True, nullable=True)  # For Supabase integration
-    AvatarUrl = db.Column(db.Text, nullable=True)  # For Google profile pictures
-
-    # Relationships
-    registrations = db.relationship('Registration', back_populates='user')
-    skills = db.relationship('UserSkill', back_populates='user')
-    led_workshops = db.relationship('WorkshopLeader', back_populates='leader')
 
 
 class Skill(db.Model):
@@ -111,13 +122,14 @@ class Workshop(db.Model):
 class WorkshopLeader(db.Model):
     __tablename__ = 'WorkshopLeader'
     # composite key
-    WorkshopId = db.Column(db.Integer, db.ForeignKey('Workshop.WorkshopId'),  primary_key=True, index=True)
-    LeaderId = db.Column(db.Integer, db.ForeignKey('Users.UserId'),  primary_key=True, index=True)
+    WorkshopId = db.Column(db.Integer, db.ForeignKey('Workshop.WorkshopId'), primary_key=True, index=True)
+    LeaderId = db.Column(db.Integer, db.ForeignKey('Users.UserId'), primary_key=True, index=True)
     AssignedAt = db.Column(db.Text, nullable=False, default=db.text("datetime('now')"))
 
     # Relationships
     workshop = db.relationship('Workshop', back_populates='leaders')
     leader = db.relationship('Users', back_populates='led_workshops')
+
 
 class WorkshopSkill(db.Model):
     __tablename__ = 'WorkshopSkill'
