@@ -1,15 +1,21 @@
 from flask import Flask
+
 from config import Config
 from models import db
 from routes import init_routes
 
-def create_app():
+
+def create_app(config_object=Config):
+    """
+    Application factory that creates and configures the Flask app.
+    Accepts a configuration object to allow for different environments (e.g., testing).
+    """
     app = Flask(__name__)
-    app.config.from_object(Config)
-    
+    app.config.from_object(config_object)
+
     # Initialize database
     db.init_app(app)
-    
+
     # Initialize routes
     init_routes(app)
     

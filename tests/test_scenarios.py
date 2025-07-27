@@ -22,12 +22,8 @@ class TestConfig:
 @pytest.fixture(scope='module')
 def app():
     """Create and configure a new app instance for each test module."""
-    app = create_app()
-    app.config.from_object(TestConfig)
-    with app.app_context():
-        db.create_all()
-        yield app
-        db.drop_all()
+    app = create_app(config_object=TestConfig)
+    return app
 
 
 @pytest.fixture(scope='module')
@@ -90,6 +86,8 @@ def init_database(app):
 
         db.session.commit()
         yield db
+
+        # clean after each test
         db.session.remove()
         db.drop_all()
 
