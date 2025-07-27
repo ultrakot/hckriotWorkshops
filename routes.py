@@ -4,7 +4,7 @@ from urllib.parse import urlencode, urlparse
 from flask import Flask, request, jsonify, abort
 
 from auth import require_auth
-from models import db, Workshop, Registration, WorkshopSkill, Skill, UserSkill
+from models import db, Workshop, Registration, WorkshopSkill, Skill, UserSkill, RegistrationStatus
 
 
 def init_routes(app: Flask):
@@ -340,7 +340,7 @@ def init_routes(app: Flask):
             # Count registered users (not waitlisted or cancelled)
             registered_count = Registration.query.filter_by(
                 WorkshopId=w.WorkshopId,
-                Status='Registered'
+                Status=RegistrationStatus.REGISTERED
             ).count()
             vacant = w.MaxCapacity - registered_count
 
@@ -359,7 +359,7 @@ def init_routes(app: Flask):
         # Count registered users
         registered_count = Registration.query.filter_by(
             WorkshopId=w.WorkshopId,
-            Status='Registered'
+            Status=RegistrationStatus.REGISTERED
         ).count()
         vacant = w.MaxCapacity - registered_count
 
@@ -478,7 +478,7 @@ def init_routes(app: Flask):
         ).first()
 
         # If user is already registered or waitlisted, prevent duplicate signup
-        if existing_registration and existing_registration.Status in ['Registered', 'Waitlisted']:
+        if existing_registration and existing_registration.Status in [RegistrationStatus.REGISTERED, RegistrationStatus.WAITLISTED]:
             return jsonify({
                 'error': 'Already signed up',
                 'current_status': existing_registration.Status,
@@ -490,10 +490,10 @@ def init_routes(app: Flask):
 
         # Determine new status based on capacity
         if registered_count >= w.MaxCapacity:
-            new_status = 'Waitlisted'
+            new_status = RegistrationStatus.WAITLISTED
             message = 'Added to waitlist'
         else:
-            new_status = 'Registered'
+            new_status = RegistrationStatus.REGISTERED
             message = 'Signed up successfully'
 
         if existing_registration:
@@ -524,10 +524,10 @@ def init_routes(app: Flask):
         registration = Registration.query.filter_by(
             UserId=request.local_user.UserId,
             WorkshopId=w_id
-        ).filter(Registration.Status.in_(['Registered', 'Waitlisted'])).first_or_404()
+        ).filter(Registration.Status.in_([RegistrationStatus.REGISTERED, RegistrationStatus.WAITLISTED])).first_or_404()
 
         old_status = registration.Status
-        registration.Status = 'Cancelled'
+        registration.Status = RegistrationStatus.CANCELLED
         db.session.commit()
 
         return jsonify({
@@ -557,8 +557,8 @@ def init_routes(app: Flask):
             'registered': True,
             'status': registration.Status,
             'registered_at': registration.RegisteredAt,
-            'can_cancel': registration.Status in ['Registered', 'Waitlisted'],
-            'can_signup': registration.Status == 'Cancelled'
+            'can_cancel': registration.Status in [RegistrationStatus.REGISTERED, RegistrationStatus.WAITLISTED],
+            'can_signup': registration.Status == RegistrationStatus.CANCELLED
         })
 
     @app.route('/vacant/<int:w_id>', methods=['GET'])
@@ -601,9 +601,10 @@ def init_routes(app: Flask):
 ######## helper functions
 
 def _get_registered_count(w_id):
+    """get number of registered users for a workshop"""
     registered_count = Registration.query.filter_by(
         WorkshopId=w_id,
-        Status='Registered'
+        Status=RegistrationStatus.REGISTERED
     ).count()
     return registered_count
 
@@ -614,11 +615,11 @@ def _remove_participants_from_workshop(w_id, num_participants):
     """
     cancelled_registrations = Registration.query.filter_by(
         WorkshopId=w_id,
-        Status='Registered'
+        Status=RegistrationStatus.REGISTERED
     ).order_by(Registration.RegisteredAt.desc()).limit(num_participants).all()
 
     for reg in cancelled_registrations:
-        reg.Status = 'Cancelled'
+        reg.Status = RegistrationStatus.CANCELLED
 
     # note: email is sent to participant in another function
     user_ids = [reg.UserId for reg in cancelled_registrations]

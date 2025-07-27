@@ -16,6 +16,11 @@ class UserRole(enum.Enum):
     def __ge__(self, other):
         return self.level >= other.level
 
+class RegistrationStatus(enum.Enum):
+    """possible statuses for a workshop registration."""
+    REGISTERED = 'Registered'
+    WAITLISTED = 'Waitlisted'
+    CANCELLED = 'Cancelled'
 
 class Users(db.Model):
     __tablename__ = 'Users'
@@ -131,7 +136,7 @@ class Registration(db.Model):
     WorkshopId = db.Column(db.Integer, db.ForeignKey('Workshop.WorkshopId'), nullable=False)
     UserId = db.Column(db.Integer, db.ForeignKey('Users.UserId'), nullable=False)
     RegisteredAt = db.Column(db.Text, nullable=False, default=db.text("datetime('now')"))
-    Status = db.Column(db.Text, nullable=False)  # CHECK constraint handled at DB level
+    Status = db.Column(db.Enum(RegistrationStatus), nullable=False)  # CHECK constraint handled at DB level
 
     # Relationships
     workshop = db.relationship('Workshop', back_populates='registrations')

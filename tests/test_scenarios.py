@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from app import create_app
-from models import db, Users, Workshop, WorkshopLeader, Registration, UserRole
+from models import db, Users, Workshop, WorkshopLeader, Registration, UserRole, RegistrationStatus
 
 FAKE_JWT = 'fake.jwt.token'
 
@@ -61,7 +61,7 @@ def init_database(app):
         db.session.add(leader_assignment)
 
         # Add a registration to the first workshop to test capacity logic
-        registration = Registration(WorkshopId=1, UserId=3, Status='Registered')
+        registration = Registration(WorkshopId=1, UserId=3, Status=RegistrationStatus.REGISTERED)
         db.session.add(registration)
 
         db.session.commit()
