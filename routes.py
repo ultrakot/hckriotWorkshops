@@ -1,5 +1,6 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Optional
 from urllib.parse import urlencode, urlparse
 
 from flask import Flask, request, jsonify, abort
@@ -395,18 +396,14 @@ def init_routes(app: Flask):
         w = Workshop.query.get_or_404(w_id)
 
         # Count registered users
-        registered_count = Registration.query.filter_by(
-            WorkshopId=w.WorkshopId,
-            Status=RegistrationStatus.REGISTERED
-        ).count()
+        registered_count = _get_registered_count(w_id)
         vacant = w.MaxCapacity - registered_count
 
         return jsonify({
             'id': w.WorkshopId,
             'title': w.Title,
             'description': w.Description,
-            'date': w.SessionDate.isoformat(),
-            'time': w.StartTime,
+            'session_datetime': w.SessionDateTime.isoformat(),
             'duration_mins': w.DurationMin,
             'capacity': w.MaxCapacity,
             'vacant': vacant
@@ -428,7 +425,7 @@ def init_routes(app: Flask):
             return jsonify({'error': 'Bad Request', 'message': 'No JSON data provided.'}), 400
 
         # --- Data Validation ---
-        required_fields = ['title', 'start_time', 'session_date', 'duration_min', 'capacity']
+        required_fields = ['title', 'session_datetime', 'duration_min', 'capacity']
         missing_fields = [field for field in required_fields if field not in data]
         if missing_fields:
             return jsonify({
@@ -437,9 +434,8 @@ def init_routes(app: Flask):
             }), 400
 
         title = data.get('title')
-        description = data.get('description','')  # Optional in model
-        session_date_str = data.get('session_date')
-        start_time_str = data.get('start_time')
+        description = data.get('description', '')  # Optional in model
+        session_datetime_str = data.get('session_datetime')
         duration_min = data.get('duration_min')
         capacity = data.get('capacity')
 
@@ -454,20 +450,16 @@ def init_routes(app: Flask):
             return jsonify({'error': 'Bad Request', 'message': 'Capacity must be a non-negative integer.'}), 400
 
         try:
-            session_date = datetime.strptime(session_date_str, '%Y-%m-%d').date()
+            session_datetime = datetime.fromisoformat(session_datetime_str)
         except (ValueError, TypeError):
-            return jsonify({'error': 'Bad Request', 'message': 'session_date must be in YYYY-MM-DD format.'}), 400
-        try:
-            datetime.strptime(start_time_str, '%H:%M:%S')
-        except (ValueError, TypeError):
-            return jsonify({'error': 'Bad Request', 'message': 'start_time must be in HH:MM:SS format.'}), 400
+            return jsonify({'error': 'Bad Request',
+                            'message': 'session_datetime must be a valid ISO 8601 datetime string (e.g., "2025-09-10T10:00:00Z")'}), 400
 
         # --- Create Workshop ---
         new_workshop = Workshop(
             Title=title.strip(),
             Description=description,
-            SessionDate=session_date,
-            StartTime=start_time_str,
+            SessionDateTime=session_datetime,
             DurationMin=duration_min,
             MaxCapacity=capacity
         )
@@ -480,8 +472,7 @@ def init_routes(app: Flask):
                 'id': new_workshop.WorkshopId,
                 'title': new_workshop.Title,
                 'description': new_workshop.Description,
-                'session_date': new_workshop.SessionDate.isoformat(),
-                'start_time': new_workshop.StartTime,
+                'session_datetime': new_workshop.SessionDateTime.isoformat(),
                 'duration_min': new_workshop.DurationMin,
                 'capacity': new_workshop.MaxCapacity
             }
@@ -584,6 +575,15 @@ def init_routes(app: Flask):
                 'current_status': existing_registration.Status,
                 'registered_at': existing_registration.RegisteredAt
             }), 400
+
+        # Check scheduling conflicts
+        conflicting_workshop = _check_for_registration_overlap(user_id, w)
+        if conflicting_workshop:
+            return jsonify({
+                'error': 'Conflict',
+                'message': f'This workshop overlaps with another registered workshop: "{conflicting_workshop.Title}".',
+                'conflicting_workshop_id': conflicting_workshop.WorkshopId
+            }), 409
 
         # Count current active registrations
         registered_count = _get_registered_count(w_id)
@@ -707,6 +707,40 @@ def _get_registered_count(w_id):
     return registered_count
 
 
+def _check_for_registration_overlap(user_id: int, target_workshop: Workshop) -> Optional[Workshop]:
+    """
+    Checks if a target workshop overlaps with any of the user's existing registered workshops.
+    (target_workshop = the Workshop object the user is trying to register for.)
+
+    Returns:
+        conflicting Workshop object if an overlap is found,
+        otherwise None.
+    """
+    # start time + end time for target workshop
+    target_start_dt = target_workshop.SessionDateTime
+    target_end_dt = target_start_dt + timedelta(minutes=target_workshop.DurationMin)
+
+    # Get all user's other active registrations
+    # (join to be able to filter and access workshop properties)
+    existing_registrations = Registration.query.join(Workshop).filter(
+        Registration.UserId == user_id,
+        Registration.Status == RegistrationStatus.REGISTERED,
+        Workshop.WorkshopId != target_workshop.WorkshopId
+    ).all()
+
+    # check for time collision
+    for reg in existing_registrations:
+        existing_ws = reg.workshop
+        existing_start_dt = existing_ws.SessionDateTime
+        existing_end_dt = existing_start_dt + timedelta(minutes=existing_ws.DurationMin)
+
+        # overlap condition: (StartA < EndB) and (EndA > StartB)
+        if (target_start_dt < existing_end_dt) and (target_end_dt > existing_start_dt):
+            return existing_ws  # Found a conflict
+
+    return None  # No conflicts found
+
+
 def _remove_participants_from_workshop(w_id, num_participants):
     """remove participants due to capacity limit, lifo.
     returns user_ids of cancelled registrations
@@ -731,6 +765,7 @@ def _update_waitlisted_participants(w_id):
     """email waitlisted participants of workshop (if any):
       capacity+, can now register"""
     # TODO
+    # reminder: make sure 'waitlisted' status doesn't prevent user from registering at this point
     pass
 
 

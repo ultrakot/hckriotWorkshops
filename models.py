@@ -1,5 +1,5 @@
 import enum
-from datetime import date
+from datetime import datetime, timezone
 
 from flask_sqlalchemy import SQLAlchemy
 
@@ -110,8 +110,7 @@ class Workshop(db.Model):
     WorkshopId = db.Column(db.Integer, primary_key=True, autoincrement=True)
     Title = db.Column(db.Text, nullable=False)
     Description = db.Column(db.Text, nullable=False, default="")
-    SessionDate = db.Column(db.Date, nullable=False, default=date(2025, 9, 10))  # 'YYYY-MM-DD'
-    StartTime = db.Column(db.Text, nullable=False)  # 'HH:MM:SS'
+    SessionDateTime = db.Column(db.DateTime(timezone=True), nullable=False) # SQLite doesn't preserve timezone info
     DurationMin = db.Column(db.Integer, nullable=False)
     MaxCapacity = db.Column(db.Integer, nullable=False)
 

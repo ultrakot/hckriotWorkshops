@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -60,13 +60,16 @@ def init_database(app):
         db.session.add(user_skill)
 
         # Create Workshops
-        w_date = date(2025, 9, 1)
+
+        w1_date = datetime(2025, 9, 10, 9, 0, tzinfo=timezone.utc)
+        w2_date = w1_date + timedelta(hours=1)
+        w3_date = w1_date + timedelta(hours=3)
         workshop1 = Workshop(WorkshopId=1, Title='workshop1 init', Description='A beginner workshop.', MaxCapacity=10,
-                             SessionDate=w_date, StartTime='10:00:00', DurationMin=120)
+                             SessionDateTime=w1_date, DurationMin=90)
         workshop2 = Workshop(WorkshopId=2, Title='workshop2 init', Description='A deep-dive workshop.', MaxCapacity=1,
-                             SessionDate=w_date, StartTime='14:00:00', DurationMin=180)
+                             SessionDateTime=w2_date, DurationMin=180)
         workshop3 = Workshop(WorkshopId=3, Title='workshop3 init', Description='workshop3 description.', MaxCapacity=15,
-                             SessionDate=w_date, StartTime='16:00:00', DurationMin=120)
+                             SessionDateTime=w3_date, DurationMin=120)
         db.session.add_all([workshop1, workshop2, workshop3])
         db.session.flush()
 
@@ -306,6 +309,13 @@ class TestWorkshopLeadership:
 
 class TestCreateWorkshop:
     """Tests for the POST /workshops endpoint."""
+    good_workshop_data = {
+        "title": "New Advanced Workshop",
+        "description": "A new advanced workshop.",
+        "session_datetime": "2025-11-15 10:00:00",
+        "duration_min": 180,
+        "capacity": 20
+    }
 
     @patch('auth.get_supabase')
     def test_admin_can_create_workshop(self, mock_get_supabase, client, init_database):
@@ -318,20 +328,11 @@ class TestCreateWorkshop:
         admin_user = db.session.get(Users, 1)
         mock_authed_user(mock_get_supabase, admin_user)
 
-        workshop_data = {
-            "title": "New Advanced Workshop",
-            "description": "A new advanced workshop.",
-            "session_date": "2025-11-15",
-            "start_time": "09:00:00",
-            "duration_min": 180,
-            "capacity": 20
-        }
-
         # Act
         response = client.post(
             '/workshops',
             headers={'Authorization': f'Bearer {FAKE_JWT}'},
-            data=json.dumps(workshop_data),
+            data=json.dumps(self.good_workshop_data),
             content_type='application/json'
         )
 
@@ -341,11 +342,19 @@ class TestCreateWorkshop:
         assert response_data['message'] == 'Workshop created successfully.'
         assert response_data['workshop']['title'] == "New Advanced Workshop"
         assert response_data['workshop']['capacity'] == 20
+        assert response_data['workshop']['session_datetime'] == '2025-11-15T10:00:00'
 
         # Verify it's in the database
         new_workshop = Workshop.query.get(response_data['workshop']['id'])
         assert new_workshop is not None
         assert new_workshop.Title == "New Advanced Workshop"
+
+        # test /workshops/{id} endpoint
+        response = client.get(f'/workshops/{new_workshop.WorkshopId}', headers={'Authorization': f'Bearer {FAKE_JWT}'})
+        assert response.status_code == 200
+        assert response.get_json()['title'] == "New Advanced Workshop"
+        assert response.get_json()['capacity'] == 20
+        assert response.get_json()['session_datetime'] == '2025-11-15T10:00:00'
 
     @patch('auth.get_supabase')
     def test_non_admin_cannot_create_workshop(self, mock_get_supabase, client, init_database):
@@ -358,19 +367,16 @@ class TestCreateWorkshop:
         leader_user = db.session.get(Users, 2)
         participant_user = db.session.get(Users, 3)
 
-        workshop_data = {"title": "Unauthorized Workshop", "session_date": "2025-01-01", "start_time": "12:00:00",
-                         "duration_min": 60, "capacity": 5}
-
         # Act & Assert for Workshop Leader
         mock_authed_user(mock_get_supabase, leader_user)
         response_leader = client.post('/workshops', headers={'Authorization': f'Bearer {FAKE_JWT}'},
-                                      data=json.dumps(workshop_data), content_type='application/json')
+                                      data=json.dumps(self.good_workshop_data), content_type='application/json')
         assert response_leader.status_code == 403
 
         # Act & Assert for Participant
         mock_authed_user(mock_get_supabase, participant_user)
         response_participant = client.post('/workshops', headers={'Authorization': f'Bearer {FAKE_JWT}'},
-                                           data=json.dumps(workshop_data), content_type='application/json')
+                                           data=json.dumps(self.good_workshop_data), content_type='application/json')
         assert response_participant.status_code == 403
 
     @patch('auth.get_supabase')
@@ -386,15 +392,13 @@ class TestCreateWorkshop:
         invalid_payloads = [
             ({}, "data"),  # Empty payload
             ({"title": "Incomplete"}, "required fields"),  # Missing fields
-            ({"title": "", "session_date": "2025-11-15", "start_time": "09:00:00", "duration_min": 180, "capacity": 20},
-             "non-empty string"),
-            ({"title": "Bad Date", "session_date": "15-11-2025", "start_time": "09:00:00", "duration_min": 180,
-              "capacity": 20}, "YYYY-MM-DD format"),
-            ({"title": "Bad Time", "session_date": "2025-11-15", "start_time": "9am", "duration_min": 180,
-              "capacity": 20}, "HH:MM:SS format"),
-            ({"title": "Bad Duration", "session_date": "2025-11-15", "start_time": "09:00:00", "duration_min": -10,
+            ({"title": "", "session_datetime": "2025-11-15 09:00:00",
+              "duration_min": 180, "capacity": 20}, "non-empty string"),
+            ({"title": "Bad Date", "session_datetime": "15-11-2025 09:00:00", "duration_min": 180,
+              "capacity": 20}, "ISO"),
+            ({"title": "Bad Duration", "session_datetime": "2025-11-15 09:00:00", "duration_min": -10,
               "capacity": 20}, "positive integer"),
-            ({"title": "Bad Capacity", "session_date": "2025-11-15", "start_time": "09:00:00", "duration_min": 180,
+            ({"title": "Bad Capacity", "session_datetime": "2025-11-15 09:00:00", "duration_min": 180,
               "capacity": "twenty"}, "non-negative integer"),
         ]
 
@@ -442,3 +446,78 @@ class TestUserProfile:
         assert skill_data['name'] == 'python'
         assert skill_data['grade'] == 1
         assert isinstance(skill_data['id'], int)
+
+
+class TestWorkshopRegistration:
+    """Tests for user registration logic (signup, cancel, conflicts)."""
+
+    @patch('auth.get_supabase')
+    def test_cannot_register_for_overlapping_workshop(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a user is registered for a workshop from 09:00-10:30
+        WHEN they try to register for another workshop from 10:00-11:00 on the same day
+        THEN they should receive a 409 Conflict error.
+        """
+        # Arrange
+        # This user is registered for workshop1 (09:00-10:30 UTC)
+        participant = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, participant)
+
+        # Create an overlapping workshop in the database
+        # workshop1 ends at 10:30. This one starts at 10:00.
+        overlapping_datetime = datetime(2025, 9, 10, 10, 0, tzinfo=timezone.utc)
+        overlapping_workshop = Workshop(
+            Title="Overlapping Workshop",
+            SessionDateTime=overlapping_datetime,
+            DurationMin=60,  # 10:00 - 11:00
+            MaxCapacity=10
+        )
+        db.session.add(overlapping_workshop)
+        db.session.commit()
+
+        # Act
+        response = client.post(
+            f'/workshops/{overlapping_workshop.WorkshopId}/register',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'}
+        )
+
+        # Assert
+        assert response.status_code == 409
+        data = response.get_json()
+        assert data['error'] == 'Conflict'
+        assert 'overlaps with another registered workshop' in data['message']
+        assert data['conflicting_workshop_id'] == 1  # workshop1
+
+    @patch('auth.get_supabase')
+    def test_can_register_for_non_overlapping_workshop(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a user is registered for a workshop from 09:00-10:30
+        WHEN they try to register for another workshop that starts at 10:30 (back-to-back)
+        THEN the registration should be successful.
+        """
+        # Arrange
+        participant = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, participant)
+
+        # Create a non-overlapping
+        # workshop1 ends at 10:30. This one starts at 10:30.
+        some_datetime = datetime(2025, 9, 10, 10, 30, tzinfo=timezone.utc)
+        non_overlapping_workshop = Workshop(
+            Title="Some Workshop",
+            SessionDateTime=some_datetime,
+            DurationMin=60,
+            MaxCapacity=10
+        )
+        db.session.add(non_overlapping_workshop)
+        db.session.commit()
+
+        # Act
+        response = client.post(
+            f'/workshops/{non_overlapping_workshop.WorkshopId}/register',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'}
+        )
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['status'] == 'Signed up successfully'
