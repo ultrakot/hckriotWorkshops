@@ -203,7 +203,8 @@ Should return a Google OAuth URL.
 | POST | `/auth/extract-token` | Extract token from callback | No |
 | GET | `/user/profile` | Get user profile | Yes |
 | GET | `/workshops` | List workshops | Yes |
-| POST | `/signup/{workshop_id}` | Register for workshop | Yes |
+| POST | `/workshops/{workshop_id}/register` | Register for workshop | Yes |
+| DELETE | `/workshops/{workshop_id}/register` | Cancel registration for workshop | Yes |
 
 ## 🗃️ Database
 

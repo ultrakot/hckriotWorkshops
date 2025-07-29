@@ -175,8 +175,8 @@ def test_schema_compatibility():
                 'required': ['UserSkillId', 'UserId', 'SkillId', 'Grade']
             },
             'Workshop': {
-                'columns': ['WorkshopId', 'Title', 'Description', 'SessionDate', 'StartTime', 'DurationMin', 'MaxCapacity'],
-                'required': ['WorkshopId', 'Title', 'SessionDate', 'StartTime', 'DurationMin', 'MaxCapacity']
+                'columns': ['WorkshopId', 'Title', 'Description', 'SessionDateTime', 'DurationMin', 'MaxCapacity'],
+                'required': ['WorkshopId', 'Title', 'SessionDateTime', 'DurationMin', 'MaxCapacity']
             },
             'WorkshopSkill': {
                 'columns': ['WorkshopSkillId', 'WorkshopId', 'SkillId'],
