@@ -106,6 +106,10 @@ site/
 *.dump
 backup/
 backups/
+backup_*/
+
+# Project specific folders
+examples/
 
 # Docker
 Dockerfile.local

@@ -1,18 +1,38 @@
+"""
+Simple Configuration with Database Selector
+"""
 import os
+from db_selector import DatabaseSelector
 
 class Config:
-    # User's specific database location
-    DB_FOLDER = r"C:\Users\RozaVatkin\Documents\Projects\Hackeriot\Site\HackeriotDB"
-    DB_NAME = "hackeriot.db"
+    """Application configuration"""
     
-    # Construct the full database path
-    DATABASE_PATH = os.path.join(DB_FOLDER, DB_NAME)
+    # Flask Configuration
+    DEBUG = os.environ.get("DEBUG", "True").lower() in ("true", "1", "yes")
+    SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-in-production")
     
-    # SQLite URL format for absolute paths (use forward slashes even on Windows)
-    DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DATABASE_PATH.replace(os.sep, '/')}")
+    # Database - Uses DatabaseSelector to choose SQLite or Azure SQL  
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
     
+    @staticmethod
+    def _get_database_uri():
+        """Lazy loading of database URL"""
+        return DatabaseSelector.get_database_url()
+    
+    def __init__(self):
+        """Initialize configuration with lazy-loaded database URI"""
+        # Set database URI when Config is instantiated, not at class definition
+        self.SQLALCHEMY_DATABASE_URI = self._get_database_uri()
+    
+    # Supabase Integration
     SUPABASE_URL = os.environ.get("SUPABASE_URL")
     SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-    SQLALCHEMY_DATABASE_URI = DATABASE_URL
-    SQLALCHEMY_TRACK_MODIFICATIONS = False
-    DEBUG = True 
+    
+    @classmethod
+    def get_db_info(cls):
+        """Get information about current database configuration"""
+        try:
+            return DatabaseSelector.get_db_info()
+        except ValueError as e:
+            # Handle case where environment variables aren't set yet
+            return {'db_type': 'not_configured', 'error': str(e), 'status': 'missing_env_vars'}

@@ -1,3 +1,14 @@
+#!/usr/bin/env python3
+"""
+Comprehensive API scenario testing for HackerIot Workshop System.
+Tests real-world usage patterns and edge cases.
+"""
+
+# Fix imports from parent directory
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import json
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
@@ -38,13 +49,14 @@ def init_database(app):
     with app.app_context():
         db.create_all()
 
+        # Create sample test data
+        print("Creating sample test data...")
+
         # Create Users with different roles
         admin_user = Users(UserId=1, Name='Admin User', Email='admin@test.com', Role=UserRole.ADMIN)
         leader_user = Users(UserId=2, Name='Leader User', Email='leader@test.com', Role=UserRole.WORKSHOP_LEADER)
-        participant_user1 = Users(UserId=3, Name='Participant User 1', Email='participant1@test.com',
-                                  Role=UserRole.PARTICIPANT)
-        participant_user2 = Users(UserId=4, Name='Participant User 2', Email='participant2@test.com',
-                                  Role=UserRole.PARTICIPANT)
+        participant_user1 = Users(UserId=3, Name='Participant User 1', Email='participant1@test.com', Role=UserRole.PARTICIPANT)
+        participant_user2 = Users(UserId=4, Name='Participant User 2', Email='participant2@test.com', Role=UserRole.PARTICIPANT)
         db.session.add_all([admin_user, leader_user, participant_user1])
         db.session.flush()
 
@@ -312,7 +324,7 @@ class TestCreateWorkshop:
     good_workshop_data = {
         "title": "New Advanced Workshop",
         "description": "A new advanced workshop.",
-        "session_datetime": "2025-11-15 10:00:00",
+        "session_datetime": "2025-11-15T10:00:00",
         "duration_min": 180,
         "capacity": 20
     }
@@ -392,13 +404,13 @@ class TestCreateWorkshop:
         invalid_payloads = [
             ({}, "data"),  # Empty payload
             ({"title": "Incomplete"}, "required fields"),  # Missing fields
-            ({"title": "", "session_datetime": "2025-11-15 09:00:00",
+            ({"title": "", "session_datetime": "2025-11-15T09:00:00",
               "duration_min": 180, "capacity": 20}, "non-empty string"),
-            ({"title": "Bad Date", "session_datetime": "15-11-2025 09:00:00", "duration_min": 180,
+            ({"title": "Bad Date", "session_datetime": "15-11-2025T09:00:00", "duration_min": 180,
               "capacity": 20}, "ISO"),
-            ({"title": "Bad Duration", "session_datetime": "2025-11-15 09:00:00", "duration_min": -10,
+            ({"title": "Bad Duration", "session_datetime": "2025-11-15T09:00:00", "duration_min": -10,
               "capacity": 20}, "positive integer"),
-            ({"title": "Bad Capacity", "session_datetime": "2025-11-15 09:00:00", "duration_min": 180,
+            ({"title": "Bad Capacity", "session_datetime": "2025-11-15T09:00:00", "duration_min": 180,
               "capacity": "twenty"}, "non-negative integer"),
         ]
 

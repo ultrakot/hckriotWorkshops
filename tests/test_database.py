@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
 """
-Test script to verify SQLite connectivity and database schema compatibility.
-Updated to match the user's exact database schema.
+Comprehensive database testing script for HackerIot Workshop Management System.
+
+This script performs extensive testing of:
+- Database connectivity and schema validation
+- Table structure and relationships
+- Sample data operations
+- API query functionality
+- Data integrity and constraints
+
+Run this after setting up your database to ensure everything works correctly.
 """
 
+# Fix imports from parent directory
 import sys
 import os
-import sqlite3
-from datetime import datetime
-from flask import Flask
-
-# Add the parent directory to sys.path to import our modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import sqlite3
+import json
+from datetime import datetime, timedelta
+import requests
+import time
+from flask import Flask
 
 def check_database_exists():
     """Check if the database file exists and throw detailed errors if not."""
@@ -185,6 +196,10 @@ def test_schema_compatibility():
             'Registration': {
                 'columns': ['RegistrationId', 'WorkshopId', 'UserId', 'RegisteredAt', 'Status'],
                 'required': ['RegistrationId', 'WorkshopId', 'UserId', 'RegisteredAt', 'Status']
+            },
+            'WorkshopLeader': {
+                'columns': ['WorkshopId', 'LeaderId', 'AssignedAt'],
+                'required': ['WorkshopId', 'LeaderId', 'AssignedAt']
             }
         }
         
@@ -261,7 +276,7 @@ def test_sample_data():
     
     try:
         from config import Config
-        from models import db, Users, Workshop, Registration, Skill, UserSkill, WorkshopSkill
+        from models import db, Users, Workshop, Registration, Skill, UserSkill, WorkshopSkill, UserRole
         from flask import Flask
         
         app = Flask(__name__)
@@ -277,11 +292,16 @@ def test_sample_data():
             if sample_user:
                 print(f"   [USER] {sample_user.Name} ({sample_user.Email})")
                 print(f"       UserId: {sample_user.UserId}, Created: {sample_user.CreatedDate}")
+                print(f"       Role (DB Integer): {sample_user._role}, Role (Enum): {sample_user.Role}")
                 
                 # Test User relationships
                 user_skills = sample_user.skills
                 user_registrations = sample_user.registrations
                 print(f"       Skills: {len(user_skills)}, Registrations: {len(user_registrations)}")
+                
+                # Test role checking methods
+                print(f"       Is Admin: {sample_user.is_admin()}")
+                print(f"       Can Manage Workshops: {sample_user.can_manage_workshops()}")
             else:
                 print("   [USER] No users found")
             
@@ -289,7 +309,7 @@ def test_sample_data():
             sample_workshop = Workshop.query.first()
             if sample_workshop:
                 print(f"   [WORKSHOP] {sample_workshop.Title}")
-                print(f"       Date: {sample_workshop.SessionDate}, Time: {sample_workshop.StartTime}")
+                print(f"       DateTime: {sample_workshop.SessionDateTime}")
                 print(f"       Duration: {sample_workshop.DurationMin}min, Capacity: {sample_workshop.MaxCapacity}")
                 
                 # Test Workshop relationships
@@ -311,15 +331,32 @@ def test_sample_data():
             if sample_registration:
                 print(f"   [REGISTRATION] ID {sample_registration.RegistrationId}")
                 print(f"       User: {sample_registration.UserId}, Workshop: {sample_registration.WorkshopId}")
-                print(f"       Status: {sample_registration.Status}, Registered: {sample_registration.RegisteredAt}")
+                print(f"       Status (DB Integer): {sample_registration._status}, Status (Enum): {sample_registration.Status}")
+                print(f"       Registered: {sample_registration.RegisteredAt}")
             else:
                 print("   [REGISTRATION] No registrations found")
             
+            # Test both hybrid integer conversions
+            all_registrations = Registration.query.all()
+            if all_registrations:
+                print(f"\n   [HYBRID STATUS TEST] Found {len(all_registrations)} registrations:")
+                for reg in all_registrations:
+                    print(f"       Registration {reg.RegistrationId}: DB Integer={reg._status} -> Enum={reg.Status}")
+            
+            all_users = Users.query.all()
+            print(f"\n   [HYBRID ROLE TEST] Found {len(all_users)} users:")
+            for user in all_users:
+                print(f"       {user.Name}: DB Integer={user._role} -> Enum={user.Role}")
+                print(f"                     Can manage workshops: {user.can_manage_workshops()}")
+            
             print("[OK] Sample data reading successful!")
+            print("[OK] Both hybrid integer->enum conversions working!")
             return True
             
     except Exception as e:
         print(f"[ERROR] Sample data test failed: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def test_queries():
@@ -427,10 +464,10 @@ def main():
     if passed == total:
         print("*** All tests passed! Your database is ready for Supabase integration. ***")
         print("\nYour schema is perfect:")
-        print("• All tables present with correct structure")
-        print("• Foreign key relationships working")
-        print("• Sample data accessible")
-        print("• API queries functional")
+        print("- All tables present with correct structure")
+        print("- Foreign key relationships working")
+        print("- Sample data accessible")
+        print("- API queries functional")
         print("\nNext steps:")
         print("1. Run: python migrate_user_table.py")
         print("2. Set up Supabase environment variables")

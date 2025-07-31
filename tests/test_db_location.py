@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 """
-Quick script to verify database location and connection.
-Use this to test if your database path is correctly configured.
+Database location and connectivity test for HackerIot Workshop System.
+
+This script tests:
+1. Database file existence and accessibility
+2. Basic connectivity to SQLite database
+3. Table existence verification
+4. Simple query execution
+
+This is typically the first test to run to ensure your database setup is correct.
 """
 
+# Fix imports from parent directory
 import sys
 import os
-import sqlite3
-
-# Add the parent directory to sys.path to import our modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import sqlite3
+import json
+from pathlib import Path
 
 from config import Config
 
@@ -134,9 +143,9 @@ if __name__ == "__main__":
             print("\n*** Everything looks good! ***")
             print("Your database is properly configured and accessible.")
             print("\nNext steps:")
-            print("• Run: python tests/test_database.py (full connectivity test)")
-            print("• Run: python migrate_user_table.py (add Supabase columns)")
-            print("• Start your Flask app: python app.py")
+            print("- Run: python tests/test_database.py (full connectivity test)")
+            print("- Run: python migrate_user_table.py (add Supabase columns)")
+            print("- Start your Flask app: python app.py")
         else:
             print("\n[WARNING] Database found but Flask connection failed")
             print("Check your models.py and requirements")

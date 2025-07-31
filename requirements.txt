@@ -6,6 +6,9 @@ Werkzeug==2.3.7
 Flask-SQLAlchemy==3.0.5
 SQLAlchemy==1.4.53
 
+# Database Drivers
+pyodbc==4.0.39          # For SQL Server/Azure SQL connectivity
+
 # Supabase Integration
 supabase==1.2.0
 

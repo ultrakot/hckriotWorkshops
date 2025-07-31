@@ -83,7 +83,7 @@ def check_tables():
     try:
         print("\nChecking database tables...")
         
-        required_tables = ['Users', 'Workshop', 'Registration', 'Skill', 'UserSkill', 'WorkshopSkill']
+        required_tables = ['Users', 'Workshop', 'Registration', 'Skill', 'UserSkill', 'WorkshopSkill', 'WorkshopLeader', 'RoleTypes', 'StatusTypes']
         
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
         existing_tables = [table[0] for table in cursor.fetchall()]
