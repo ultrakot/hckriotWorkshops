@@ -1,8 +1,12 @@
+import logging
 from functools import wraps
 from flask import request, abort
 from supabase import create_client, Client
 from config import Config
 from models import db, Users
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Initialize Supabase client with error handling
 def get_supabase_client():
@@ -31,24 +35,26 @@ def require_auth(f):
         # Extract token from Authorization header
         auth_header = request.headers.get('Authorization', '')
         if not auth_header.startswith('Bearer '):
-            print("❌ Missing or invalid Authorization header")
+            if Config.DEBUG:
+                logger.warning("Missing or invalid Authorization header")
             abort(401)
         
         token = auth_header.replace('Bearer ', '').strip()
         if not token:
-            print("❌ Empty token")
+            if Config.DEBUG:
+                logger.warning("Empty token provided")
             abort(401)
         
         # Basic JWT format validation
         if token.count('.') != 2:
-            print(f"❌ Invalid JWT format - token has {token.count('.')} dots, expected 2")
-            print(f"Token preview: {token[:50]}...")
+            if Config.DEBUG:
+                logger.warning(f"Invalid JWT format - token has {token.count('.')} dots, expected 2")
             abort(401)
         
         try:
             supabase = get_supabase()
         except ValueError as e:
-            print(f"Supabase configuration error: {e}")
+            logger.error(f"Supabase configuration error: {e}")
             abort(500)
         
         try:
@@ -56,9 +62,8 @@ def require_auth(f):
             from gotrue import User
             user_data = supabase.auth.get_user(token)
         except Exception as e:
-            print(f"❌ Token validation failed: {e}")
-            print(f"Token preview: {token[:30]}...")
-            print(f"Full error: {str(e)}")
+            if Config.DEBUG:
+                logger.warning(f"Token validation failed: {e}")
             abort(401)
         if not user_data.user:
             abort(401)

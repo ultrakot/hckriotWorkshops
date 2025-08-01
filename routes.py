@@ -7,6 +7,7 @@ from flask import Flask, request, jsonify, abort
 
 from auth import require_auth
 from models import db, Workshop, Registration, WorkshopSkill, Skill, UserSkill, RegistrationStatus
+from config import Config
 
 
 def init_routes(app: Flask):
@@ -41,39 +42,38 @@ def init_routes(app: Flask):
                     'DELETE /workshops/{id}/register  - Cancel registration',
                     'GET    /workshops/{id}/registration_status  - Get current user registration status'
                 ],
-                'debug': [
-                    'POST /debug/token - Debug JWT token format'
-                ]
+                # Debug endpoints only shown in debug mode  
+                **({'debug': ['POST /debug/token - Debug JWT token format']} if Config.DEBUG else {})
             }
         })
 
     #########################  auth
     #########################################################################
 
-    @app.route('/debug/token', methods=['POST'])
-    def debug_token():
-        """Debug endpoint to check JWT token format."""
-        auth_header = request.headers.get('Authorization', '')
+    # Debug endpoint - only available in debug mode for security
+    if Config.DEBUG:  
+        @app.route('/debug/token', methods=['POST'])
+        def debug_token():
+            """Debug endpoint to check JWT token format. Only available when DEBUG=True."""
+            auth_header = request.headers.get('Authorization', '')
 
-        if not auth_header.startswith('Bearer '):
+            if not auth_header.startswith('Bearer '):
+                return jsonify({
+                    'error': 'Missing or invalid Authorization header',
+                    'received': auth_header[:50] if auth_header else 'None'
+                }), 400
+
+            token = auth_header.replace('Bearer ', '').strip()
+            parts = token.split('.')
+
+            # Only return basic structure info in debug mode
             return jsonify({
-                'error': 'Missing or invalid Authorization header',
-                'received': auth_header[:50] if auth_header else 'None'
-            }), 400
-
-        token = auth_header.replace('Bearer ', '').strip()
-
-        # Analyze token structure
-        parts = token.split('.')
-
-        return jsonify({
-            'token_length': len(token),
-            'token_parts': len(parts),
-            'token_preview': token[:50] + '...' if len(token) > 50 else token,
-            'parts_lengths': [len(part) for part in parts],
-            'valid_jwt_structure': len(parts) == 3,
-            'first_part_preview': parts[0][:20] if len(parts) > 0 else 'None'
-        })
+                'debug_mode': True,
+                'token_length': len(token),
+                'token_parts': len(parts),
+                'valid_jwt_structure': len(parts) == 3,
+                'note': 'Debug endpoint - disabled in production'
+            })
 
     @app.route('/auth/google/url', methods=['GET', 'POST'])
     def get_google_oauth_url():
@@ -96,7 +96,9 @@ def init_routes(app: Flask):
 
         # Default redirect URL for frontend
         if not redirect_to:
-            redirect_to = request.args.get('default_redirect', 'http://localhost:3000/auth/callback')
+            from config import Config
+            default_frontend = Config.FRONTEND_URL
+            redirect_to = request.args.get('default_redirect', f'{default_frontend}/auth/callback')
 
         # Build OAuth URL
         oauth_endpoint = f"{supabase_url}/auth/v1/authorize"
@@ -139,7 +141,7 @@ def init_routes(app: Flask):
         return jsonify({
             'providers': providers,
             'count': len(providers),
-            'default_redirect': 'http://localhost:3000/auth/callback',
+            'default_redirect': f'{Config.FRONTEND_URL}/auth/callback',
             'usage': {
                 'get_oauth_url': 'GET /auth/google/url?redirect_to=your_callback_url',
                 'custom_redirect': 'POST /auth/google/url with {"redirect_to": "your_url"}'
@@ -236,7 +238,7 @@ def init_routes(app: Flask):
             return jsonify({
                 'error': 'Missing callback_url in request body',
                 'example': {
-                    'callback_url': 'http://localhost:3000/auth/callback#access_token=eyJ...&expires_in=3600'
+                    'callback_url': f'{Config.FRONTEND_URL}/auth/callback#access_token=eyJ...&expires_in=3600'
                 }
             }), 400
 
@@ -308,7 +310,7 @@ def init_routes(app: Flask):
                 },
                 'usage': {
                     'authorization_header': f'Bearer {access_token}',
-                    'example_api_call': f'curl -H "Authorization: Bearer {access_token[:30]}..." http://localhost:5000/user/profile'
+                    'example_api_call': f'curl -H "Authorization: Bearer {access_token[:30]}..." {Config.API_URL}/user/profile'
                 }
             })
 

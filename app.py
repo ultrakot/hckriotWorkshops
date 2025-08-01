@@ -1,4 +1,10 @@
 from flask import Flask
+from flask_cors import CORS
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from config import Config
 from models import db
@@ -17,6 +23,20 @@ def create_app(config_object=None):
         config_object = Config()
     
     app.config.from_object(config_object)
+    
+    # Enable CORS for production frontend integration
+    # Only allow specific origins for security
+    cors_origins = [
+        config_object.FRONTEND_URL,
+        "http://localhost:3000",   # Development frontend
+        "https://localhost:3000"   # HTTPS development
+    ]
+    
+    # Add additional allowed origins from environment variable
+    additional_origins = os.environ.get('CORS_ORIGINS', '').split(',')
+    cors_origins.extend([origin.strip() for origin in additional_origins if origin.strip()])
+    
+    CORS(app, origins=cors_origins, supports_credentials=True)
 
     # Initialize database with connection pool settings if configured
     if hasattr(config_object, 'SQLALCHEMY_ENGINE_OPTIONS') and config_object.SQLALCHEMY_ENGINE_OPTIONS:
