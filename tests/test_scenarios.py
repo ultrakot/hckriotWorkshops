@@ -29,6 +29,18 @@ class TestConfig:
     # note: can set to True to see SQL queries being executed
     SQLALCHEMY_ECHO = False
 
+    @classmethod
+    def get_db_info(cls):
+        """
+        Provides database info for the test environment, satisfying
+        the interface expected by the application.
+        """
+        return {
+            'db_type': 'sqlite_in_memory',
+            'database_url': cls.SQLALCHEMY_DATABASE_URI,
+            'status': 'configured_for_testing'
+        }
+
 
 @pytest.fixture(scope='module')
 def app():
@@ -512,11 +524,12 @@ class TestWorkshopRegistration:
         mock_authed_user(mock_get_supabase, participant)
 
         # Create a non-overlapping
-        # workshop1 ends at 10:30. This one starts at 10:30.
-        some_datetime = datetime(2025, 9, 10, 10, 30, tzinfo=timezone.utc)
+        workshop3 = db.session.get(Workshop, 3)
+        back_to_back_datetime = workshop3.SessionDateTime + timedelta(minutes=workshop3.DurationMin)
+
         non_overlapping_workshop = Workshop(
             Title="Some Workshop",
-            SessionDateTime=some_datetime,
+            SessionDateTime=back_to_back_datetime,
             DurationMin=60,
             MaxCapacity=10
         )

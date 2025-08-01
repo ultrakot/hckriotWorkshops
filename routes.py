@@ -8,6 +8,8 @@ from flask import Flask, request, jsonify, abort
 from auth import require_auth
 from models import db, Workshop, Registration, WorkshopSkill, Skill, UserSkill, RegistrationStatus
 
+ALLOWED_OVERLAP = timedelta(minutes=1)
+
 
 def init_routes(app: Flask):
     @app.route('/')
@@ -31,10 +33,10 @@ def init_routes(app: Flask):
                     'GET  /user/profile - Get authenticated user profile'
                 ],
                 'workshops': [
-                    'POST /workshops - Create a new workshop',
-                    'GET  /workshops - List all workshops',
-                    'GET  /workshops/{id} - Get workshop details',
-                    'PATCH /workshops/{id} - Edit workshop (leader/admin)',
+                    'GET    /workshops - List all workshops',
+                    'GET    /workshops/{id} - Get workshop details',
+                    'POST   /workshops - Create a new workshop (admin)',
+                    'PATCH  /workshops/{id} - Edit workshop (leader/admin)',
 
                     # user registration
                     'POST   /workshops/{id}/register  - Register (sign up) for a workshop',
@@ -710,7 +712,7 @@ def _get_registered_count(w_id):
 def _check_for_registration_overlap(user_id: int, target_workshop: Workshop) -> Optional[Workshop]:
     """
     Checks if a target workshop overlaps with any of the user's existing registered workshops.
-    (target_workshop = the Workshop object the user is trying to register for.)
+    (target_workshop = Workshop the user is trying to register for.)
 
     Returns:
         conflicting Workshop object if an overlap is found,
@@ -734,8 +736,13 @@ def _check_for_registration_overlap(user_id: int, target_workshop: Workshop) -> 
         existing_start_dt = existing_ws.SessionDateTime
         existing_end_dt = existing_start_dt + timedelta(minutes=existing_ws.DurationMin)
 
-        # overlap condition: (StartA < EndB) and (EndA > StartB)
-        if (target_start_dt < existing_end_dt) and (target_end_dt > existing_start_dt):
+        # overlap duration
+        latest_start = max(target_start_dt, existing_start_dt)
+        earliest_end = min(target_end_dt, existing_end_dt)
+        overlap_duration: timedelta = earliest_end - latest_start
+
+        # Check if calculated overlap is greater than the allowed buffer
+        if overlap_duration > ALLOWED_OVERLAP:
             return existing_ws  # Found a conflict
 
     return None  # No conflicts found
