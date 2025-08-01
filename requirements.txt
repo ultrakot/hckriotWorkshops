@@ -10,6 +10,8 @@ SQLAlchemy==2.0.41
 # pyodbc==4.0.39          # NOT compatible with Python 3.13
 # Use GitHub version until PyPI release: pip install git+https://github.com/mkleehammer/pyodbc
 
+pyodbc==5.2.0
+
 # Supabase Integration - Latest compatible version
 supabase==2.16.0
 
