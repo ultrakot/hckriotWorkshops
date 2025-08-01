@@ -89,12 +89,12 @@ def init_database(app):
         # Create Workshops
 
         w1_date = datetime(2025, 9, 10, 9, 0, tzinfo=timezone.utc)
-        w2_date = w1_date + timedelta(hours=1)
+        w2_date = w1_date + timedelta(hours=1.5)
         w3_date = w1_date + timedelta(hours=3)
         workshop1 = Workshop(WorkshopId=1, Title='workshop1 init', Description='A beginner workshop.', MaxCapacity=10,
                              SessionDateTime=w1_date, DurationMin=90)
         workshop2 = Workshop(WorkshopId=2, Title='workshop2 init', Description='A deep-dive workshop.', MaxCapacity=1,
-                             SessionDateTime=w2_date, DurationMin=180)
+                             SessionDateTime=w2_date, DurationMin=60)
         workshop3 = Workshop(WorkshopId=3, Title='workshop3 init', Description='workshop3 description.', MaxCapacity=15,
                              SessionDateTime=w3_date, DurationMin=120)
         db.session.add_all([workshop1, workshop2, workshop3])
@@ -596,7 +596,92 @@ class TestWorkshopRegistration:
 
         # Now, participant_user1 will try to register.
         # The fixture has this user waitlisted, so we remove that record to ensure a clean state for the test.
-        # TODO
+        user_who_will_waitlist = db.session.get(Users, 3)
+        existing_reg = Registration.query.filter_by(UserId=user_who_will_waitlist.UserId,
+                                                    WorkshopId=workshop_id).first()
+        if existing_reg:
+            db.session.delete(existing_reg)
+            db.session.commit()
+
+        mock_authed_user(mock_get_supabase, user_who_will_waitlist)
+
+        # Act
+        response = client.post(
+            f'/workshops/{workshop_id}/register',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'}
+        )
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['status'] == 'Added to waitlist'
+        assert data['workshop_status'].lower() == 'waitlisted'
+
+        # Verify in DB that the user is now on the waitlist
+        waitlist_reg = Registration.query.filter_by(
+            UserId=user_who_will_waitlist.UserId,
+            WorkshopId=workshop_id
+        ).first()
+        assert waitlist_reg is not None
+        assert waitlist_reg.Status == RegistrationStatus.WAITLISTED
+
+
+    @patch('auth.get_supabase')
+    def test_can_register_if_waitlisted_and_capacity_increases(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a user is on the waitlist for a full workshop
+        WHEN the workshop capacity increases and the user tries to register again
+        THEN their status should be updated to REGISTERED.
+        """
+        # --- Arrange ---
+        # Use workshop2, which has a capacity of 1.
+        workshop_id = 2
+        workshop = db.session.get(Workshop, workshop_id)
+        assert workshop.MaxCapacity == 1
+
+        # Clean slate: remove any existing registrations for this workshop from the fixture.
+        Registration.query.filter_by(WorkshopId=workshop_id).delete()
+        db.session.commit()
+
+        # User 1 (ID 4) fills the only spot.
+        user1 = db.session.get(Users, 4)
+        reg1 = Registration(UserId=user1.UserId, WorkshopId=workshop_id, Status=RegistrationStatus.REGISTERED)
+        db.session.add(reg1)
+        db.session.commit()
+
+        # User 2 (ID 3) tries to register and gets put on the waitlist.
+        user2 = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, user2)
+        response_waitlist = client.post(f'/workshops/{workshop_id}/register',
+                                        headers={'Authorization': f'Bearer {FAKE_JWT}'})
+        assert response_waitlist.status_code == 200
+        assert response_waitlist.get_json()['workshop_status'] == 'Waitlisted'
+
+        # Verify state: 1 registered, 1 waitlisted
+        reg_count = Registration.query.filter_by(WorkshopId=workshop_id, Status=RegistrationStatus.REGISTERED).count()
+        wait_count = Registration.query.filter_by(WorkshopId=workshop_id, Status=RegistrationStatus.WAITLISTED).count()
+        assert reg_count == 1, "A user should be registered to make the workshop full."
+        assert wait_count == 1, "Another user should be on the waitlist."
+
+        # An admin or leader increases the capacity of the workshop.
+        workshop.MaxCapacity = 2
+        db.session.commit()
+
+        # --- Act ---
+        # The waitlisted user (user2) sees the spot opened up and tries to register again.
+        mock_authed_user(mock_get_supabase, user2)  # Re-mock to be safe
+        response_register = client.post(f'/workshops/{workshop_id}/register',
+                                        headers={'Authorization': f'Bearer {FAKE_JWT}'})
+
+        # --- Assert ---
+        assert response_register.status_code == 200
+        data = response_register.get_json()
+        assert data['status'] == 'Signed up successfully'
+        assert data['workshop_status'] == 'Registered'
+
+        # Verify in the database that the user's status is now REGISTERED.
+        final_reg = Registration.query.filter_by(UserId=user2.UserId, WorkshopId=workshop_id).one()
+        assert final_reg.Status == RegistrationStatus.REGISTERED
 
 
 class TestUserSkills:

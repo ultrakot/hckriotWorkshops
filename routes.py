@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlencode, urlparse
 
@@ -707,20 +707,21 @@ def init_routes(app: Flask):
 
         # Check for any existing registration (any status)
         existing_registration = Registration.query.filter_by(UserId=user.UserId, WorkshopId=w_id).first()
-        # If user is already registered or waitlisted, prevent duplicate signup
-        if existing_registration:
-            app.logger.info(f"existing: {existing_registration.Status}")
-            if existing_registration.Status == RegistrationStatus.REGISTERED:
-                return jsonify({'error': 'Already signed up',
-                                'current_status': existing_registration.Status}), 400
-            elif existing_registration.Status == RegistrationStatus.WAITLISTED:
-                registered_count = _get_registered_count(w_id)
-                # return only if capacity reached
-                if registered_count >= w.MaxCapacity:
-                    return jsonify({'error': 'Already on waitlist',
-                                    'current_status': existing_registration.Status}), 400
 
-        # Check scheduling conflicts
+        # If user is already registered or waitlisted, prevent duplicate signup
+        # --- Pre-checks for existing registrations ---
+        if existing_registration:
+            # Case 1: already registered
+            if existing_registration.Status == RegistrationStatus.REGISTERED:
+                return jsonify(
+                    {'error': 'Already signed up', 'current_status': existing_registration.Status.value}), 400
+
+            # Case 2: User is on waitlist, but workshop is still full
+            registered_count = _get_registered_count(w_id)
+            if existing_registration.Status == RegistrationStatus.WAITLISTED and registered_count >= w.MaxCapacity:
+                return jsonify({'error': 'Already on waitlist', 'current_status': existing_registration.Status.value}), 400
+
+        # --- Check for scheduling conflicts ---
         conflicting_workshop = _check_for_registration_overlap(user.UserId, w)
         if conflicting_workshop:
             app.logger.info(
@@ -729,9 +730,8 @@ def init_routes(app: Flask):
                             'message': f'This workshop overlaps with another registered workshop: "{conflicting_workshop.Title}".',
                             'conflicting_workshop_id': conflicting_workshop.WorkshopId}), 409
 
+        # --- Determine new status and perform action ---
         registered_count = _get_registered_count(w_id)
-
-        # Determine new status based on capacity
         if registered_count >= w.MaxCapacity:
             new_status = RegistrationStatus.WAITLISTED
             message = 'Added to waitlist'
@@ -739,13 +739,18 @@ def init_routes(app: Flask):
             new_status = RegistrationStatus.REGISTERED
             message = 'Signed up successfully'
 
+        # Update existing registration (from CANCELLED or WAITLISTED) or create a new one.
+        if existing_registration:
+            action = f"Updated from {existing_registration.Status.value} to {new_status.value}"
+            existing_registration.Status = new_status
+            existing_registration.RegisteredAt = datetime.now(timezone.utc)  # Update timestamp on re-registration
+        else:
+            action = f"Created new registration with status {new_status.value}"
+            registration = Registration(UserId=user.UserId, WorkshopId=w_id, Status=new_status)
+            db.session.add(registration)
             # check if workshop is full from now on, for log
             if registered_count + 1 == w.MaxCapacity:
                 app.logger.info(f"Workshop {w_id} is now full")
-
-        registration = Registration(UserId=user.UserId, WorkshopId=w_id, Status=new_status)
-        db.session.add(registration)
-        action = "Registered"
 
         db.session.commit()
         app.logger.info(
