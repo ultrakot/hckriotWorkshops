@@ -30,7 +30,7 @@ def create_app(config_object=None):
         config_object.FRONTEND_URL,
         "http://localhost:3000",   # Development frontend
         "https://localhost:3000"   # HTTPS development
-    ]
+    ]    
     
     # Add additional allowed origins from environment variable
     additional_origins = os.environ.get('CORS_ORIGINS', '').split(',')
@@ -59,4 +59,7 @@ if __name__ == '__main__':
     app = create_app()
     with app.app_context():
         db.create_all()
-    app.run(debug=Config.DEBUG)
+    
+    # Production-ready configuration
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port, debug=Config.DEBUG)
