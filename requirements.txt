@@ -23,7 +23,7 @@ typing-extensions==4.7.1
 
 # Additional utilities that might be needed
 python-dotenv==1.0.0  # For environment variables
-Flask-CORS==4.0.0     # Cross-Origin Resource Sharing for production
+#Flask-CORS==4.0.0     # Cross-Origin Resource Sharing for production
 requests==2.31.0      # For API testing in scripts
 
 # Production WSGI Server
