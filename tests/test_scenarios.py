@@ -7,6 +7,7 @@ Tests real-world usage patterns and edge cases.
 # Fix imports from parent directory
 import sys
 import os
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
@@ -67,9 +68,11 @@ def init_database(app):
         # Create Users with different roles
         admin_user = Users(UserId=1, Name='Admin User', Email='admin@test.com', Role=UserRole.ADMIN)
         leader_user = Users(UserId=2, Name='Leader User', Email='leader@test.com', Role=UserRole.WORKSHOP_LEADER)
-        participant_user1 = Users(UserId=3, Name='Participant User 1', Email='participant1@test.com', Role=UserRole.PARTICIPANT)
-        participant_user2 = Users(UserId=4, Name='Participant User 2', Email='participant2@test.com', Role=UserRole.PARTICIPANT)
-        db.session.add_all([admin_user, leader_user, participant_user1])
+        participant_user1 = Users(UserId=3, Name='Participant User 1', Email='participant1@test.com',
+                                  Role=UserRole.PARTICIPANT)
+        participant_user2 = Users(UserId=4, Name='Participant User 2', Email='participant2@test.com',
+                                  Role=UserRole.PARTICIPANT)
+        db.session.add_all([admin_user, leader_user, participant_user1, participant_user2])
         db.session.flush()
 
         # Create Skills
@@ -546,3 +549,271 @@ class TestWorkshopRegistration:
         assert response.status_code == 200
         data = response.get_json()
         assert data['status'] == 'Signed up successfully'
+
+
+class TestUserSkills:
+    """Tests for the POST /user/skills endpoint."""
+
+    @patch('auth.get_supabase')
+    def test_set_skills_for_user_with_no_skills(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a user with no skills
+        WHEN they post a valid list of skills
+        THEN their skills should be created and returned.
+        """
+        # Arrange
+        user = db.session.get(Users, 4)  # participant_user2 has no skills
+        mock_authed_user(mock_get_supabase, user)
+        skills_payload = [
+            {"name": "python", "grade": 4},
+            {"name": "javascript", "grade": 2}
+        ]
+
+        # Act
+        response = client.post(
+            '/user/skills',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'},
+            data=json.dumps(skills_payload),
+            content_type='application/json'
+        )
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['message'] == 'User skills updated successfully.'
+        assert len(data['skills']) == 2
+        response_skills_to_grade_map = {s['name']: s['grade'] for s in data['skills']}
+        assert response_skills_to_grade_map['python'] == 4
+        assert response_skills_to_grade_map['javascript'] == 2
+
+        # Verify in DB
+        user_skills_in_db = UserSkill.query.filter_by(UserId=user.UserId).all()
+        assert len(user_skills_in_db) == 2
+
+    @patch('auth.get_supabase')
+    def test_replace_existing_skills(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a user with existing skills
+        WHEN they post a new list of skills
+        THEN their old skills should be replaced by the new ones.
+        """
+        # Arrange
+        user = db.session.get(Users, 3)  # participant_user1 has one skill (python, grade 1)
+        assert len(user.skills) == 1
+        mock_authed_user(mock_get_supabase, user)
+
+        new_skills_payload = [
+            {"name": "javascript", "grade": 5}
+        ]
+
+        # Act
+        response = client.post(
+            '/user/skills',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'},
+            data=json.dumps(new_skills_payload),
+            content_type='application/json'
+        )
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert len(data['skills']) == 1
+        assert data['skills'][0]['name'] == 'javascript'
+        assert data['skills'][0]['grade'] == 5
+
+        # Verify in DB
+        user_skills_in_db = UserSkill.query.filter_by(UserId=user.UserId).all()
+        assert len(user_skills_in_db) == 1
+        assert user_skills_in_db[0].skill.Name == 'javascript'
+        assert user_skills_in_db[0].Grade == 5
+
+    @patch('auth.get_supabase')
+    def test_set_empty_list_clears_skills(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a user with existing skills
+        WHEN they post an empty list
+        THEN all their skills should be removed.
+        """
+        # Arrange
+        user = db.session.get(Users, 3)  # participant_user1 has one skill
+        assert len(user.skills) == 1
+        mock_authed_user(mock_get_supabase, user)
+
+        # Act
+        response = client.post(
+            '/user/skills',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'},
+            data=json.dumps([]),
+            content_type='application/json'
+        )
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert len(data['skills']) == 0
+
+        # Verify in DB
+        user_skills_in_db_count = UserSkill.query.filter_by(UserId=user.UserId).count()
+        assert user_skills_in_db_count == 0
+
+    @patch('auth.get_supabase')
+    def test_set_skills_with_invalid_payload(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an authenticated user
+        WHEN they post invalid data to the skills endpoint
+        THEN they should receive a 400 Bad Request error.
+        """
+        # Arrange
+        user = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, user)
+
+        invalid_payloads = [
+            ({"skill": "python"}, "must be a JSON list"),  # Not a list
+            ([{"name": "python"}], "Grade for skill"),  # Missing grade
+            ([{"grade": 3}], "Missing or invalid skill name"),  # Missing name
+            ([{"name": "python", "grade": "6"}], "must be an integer"),  # Grade
+            ([{"name": "nonexistent_skill", "grade": 3}], "does not exist"),  # Skill not in DB
+        ]
+
+        for payload, error_message in invalid_payloads:
+            # Act
+            response = client.post(
+                '/user/skills',
+                headers={'Authorization': f'Bearer {FAKE_JWT}'},
+                data=json.dumps(payload),
+                content_type='application/json'
+            )
+            # Assert
+            assert response.status_code == 400, f"Failed for payload: {payload}"
+            assert error_message in response.get_json()['message'], f"Failed for payload: {payload}"
+
+
+class TestAdminSkills:
+    """Tests for admin-only skill management endpoints."""
+
+    @patch('auth.get_supabase')
+    def test_get_all_skills(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an authenticated user
+        WHEN they request the list of all skills
+        THEN they should receive an alphabetically sorted list of skills.
+        """
+        # Arrange
+        # Any authenticated user can view the list of skills
+        participant = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, participant)
+
+        # Act
+        response = client.get('/skills', headers={'Authorization': f'Bearer {FAKE_JWT}'})
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert isinstance(data, list)
+        assert len(data) == 2
+
+        # Verify content and alphabetical order
+        assert data[0]['name'] == 'javascript'
+        assert data[1]['name'] == 'python'
+        assert 'id' in data[0]
+        assert isinstance(data[0]['id'], int)
+
+    @patch('auth.get_supabase')
+    def test_admin_can_add_new_skill(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an admin user is authenticated
+        WHEN they post a new, valid skill name
+        THEN the skill is created and returned with status 201.
+        """
+        # Arrange
+        admin = db.session.get(Users, 1)
+        mock_authed_user(mock_get_supabase, admin)
+        skill_payload = {"name": "GoLang"}
+
+        # Act
+        response = client.post(
+            '/skills',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'},
+            data=json.dumps(skill_payload),
+            content_type='application/json'
+        )
+
+        # Assert
+        assert response.status_code == 201
+        data = response.get_json()
+        assert data['message'] == 'Skill added successfully.'
+        assert data['skill']['name'] == 'GoLang'
+
+        # Verify in DB
+        new_skill = Skill.query.get(data['skill']['id'])
+        assert new_skill is not None
+        assert new_skill.Name == 'GoLang'
+
+    @patch('auth.get_supabase')
+    def test_non_admin_cannot_add_skill(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a non-admin user is authenticated
+        WHEN they attempt to add a new skill
+        THEN they receive a 403 Forbidden error.
+        """
+        # Arrange
+        leader = db.session.get(Users, 2)
+        participant = db.session.get(Users, 3)
+        skill_payload = {"name": "Unauthorized Skill"}
+
+        # Act & Assert for Leader
+        mock_authed_user(mock_get_supabase, leader)
+        response_leader = client.post('/skills', headers={'Authorization': f'Bearer {FAKE_JWT}'},
+                                      data=json.dumps(skill_payload), content_type='application/json')
+        assert response_leader.status_code == 403
+
+        # Act & Assert for Participant
+        mock_authed_user(mock_get_supabase, participant)
+        response_participant = client.post('/skills', headers={'Authorization': f'Bearer {FAKE_JWT}'},
+                                           data=json.dumps(skill_payload), content_type='application/json')
+        assert response_participant.status_code == 403
+
+    @patch('auth.get_supabase')
+    def test_cannot_add_duplicate_skill(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an admin is authenticated
+        WHEN they attempt to add a skill that already exists (case-insensitive)
+        THEN they receive a 409 Conflict error.
+        """
+        # Arrange
+        admin = db.session.get(Users, 1)
+        mock_authed_user(mock_get_supabase, admin)
+        # 'python' exists in the fixture, test with different casing
+        skill_payload = {"name": "PYTHON"}
+
+        # Act
+        response = client.post('/skills', headers={'Authorization': f'Bearer {FAKE_JWT}'},
+                               data=json.dumps(skill_payload), content_type='application/json')
+
+        # Assert
+        assert response.status_code == 409
+        assert 'already exists' in response.get_json()['message']
+
+    @patch('auth.get_supabase')
+    def test_cannot_add_skill_with_invalid_payload(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an admin is authenticated
+        WHEN they post an invalid payload
+        THEN they receive a 400 Bad Request error.
+        """
+        # Arrange
+        admin = db.session.get(Users, 1)
+        mock_authed_user(mock_get_supabase, admin)
+
+        invalid_payloads = [
+            ({}, "No JSON data"),
+            ({"name": ""}, "must be a non-empty string"),
+            ({"name": "   "}, "must be a non-empty string"),
+            ({"wrong_key": "test"}, "must be a non-empty string"),
+        ]
+
+        for payload, error_message in invalid_payloads:
+            response = client.post('/skills', headers={'Authorization': f'Bearer {FAKE_JWT}'}, data=json.dumps(payload),
+                                   content_type='application/json')
+            assert response.status_code == 400, f"Failed for payload: {payload}"
+            assert error_message in response.get_json()['message'], f"Failed for payload: {payload}"

@@ -4,6 +4,7 @@ from typing import Optional
 from urllib.parse import urlencode, urlparse
 
 from flask import Flask, request, jsonify, abort
+from sqlalchemy import func
 
 from auth import require_auth
 from models import db, Workshop, Registration, WorkshopSkill, Skill, UserSkill, RegistrationStatus
@@ -30,7 +31,12 @@ def init_routes(app: Flask):
                     'GET  /auth/verify - Verify token and get user info'
                 ],
                 'user': [
-                    'GET  /user/profile - Get authenticated user profile'
+                    'GET  /user/profile - Get authenticated user profile (includes skills, workshops)',
+                    'POST /user/skills  - Post authenticated user skills'
+                ],
+                'skills': [
+                    'GET  /skills  - Get possible skills available in the system',
+                    'POST /skills  - Add possible skill to the system (admin)',
                 ],
                 'workshops': [
                     'GET    /workshops - List all workshops',
@@ -362,6 +368,139 @@ def init_routes(app: Flask):
             },
             'skills': skills_data
         })
+
+    #########################  skills
+    #########################################################################
+
+    @app.route('/user/skills', methods=['POST'])
+    @require_auth
+    def set_user_skills():
+        """
+        Set or replace the current user's skills.
+
+        Expects a JSON list of objects, each with "name" and "grade".
+        for example:
+        skills_payload = [ {"name": "python", "grade": 4}, {"name": "javascript", "grade": 2} ]
+        """
+        user = request.local_user
+        data = request.get_json()
+
+        # --- Validation ---
+        if not isinstance(data, list):
+            return jsonify({'error': 'Bad Request', 'message': 'Request body must be a JSON list of skills.'}), 400
+
+        # allowed skills (skill list to choose from has to be defined in advance by admin)
+        allowed_skills_query = db.session.query(Skill.Name, Skill.SkillId).all()
+        allowed_skill_map = {name.lower(): skill_id for name, skill_id in allowed_skills_query}
+
+        new_user_skills = []
+        for i, skill_data in enumerate(data):
+            if not isinstance(skill_data, dict):
+                return jsonify({'error': 'Bad Request', 'message': f'Item at index {i} is not a valid object.'}), 400
+
+            name = skill_data.get('name')
+            grade = skill_data.get('grade')
+
+            if not name or not isinstance(name, str):
+                return jsonify({'error': 'Bad Request', 'message': f'Missing or invalid skill name at index {i}.'}), 400
+            if not isinstance(grade, int):  # can add range check for grade here when decided
+                return jsonify({'error': 'Bad Request',
+                                'message': f'Grade for skill "{name}" must be an integer.'}), 400
+
+            # Check if skill allowed (case-insensitive)
+            lowercase_name = name.strip().lower()
+            skill_id = allowed_skill_map.get(lowercase_name)
+            if not skill_id:
+                return jsonify({'error': 'Bad Request', 'message': f'Skill "{name}" does not exist.'}), 400
+
+            new_user_skills.append({'UserId': user.UserId, 'SkillId': skill_id, 'Grade': grade})
+
+        # --- Database Transaction (Replace Logic) ---
+        try:
+            # Delete existing skills for user
+            UserSkill.query.filter_by(UserId=user.UserId).delete()
+
+            # Bulk insert new skills
+            if new_user_skills:
+                db.session.bulk_insert_mappings(UserSkill, new_user_skills)
+
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            app.logger.error(f"Error setting user skills for user {user.UserId}: {e}")
+            return jsonify({'error': 'Internal Server Error', 'message': 'Could not update skills.'}), 500
+
+        # --- Response ---
+        # Query newly created skills to return them with their names
+        final_skills = db.session.query(UserSkill).filter_by(UserId=user.UserId).all()
+        response_data = [
+            {'name': us.skill.Name, 'grade': us.Grade} for us in final_skills
+        ]
+
+        return jsonify({
+            'message': 'User skills updated successfully.',
+            'skills': response_data
+        }), 200
+
+    @app.route('/skills', methods=['GET'])
+    @require_auth
+    def get_skills():
+        """
+        Get a list of all possible skills available in the system, ordered by name.
+
+        example response: [{"id": 1, "name": "python"}, {"id": 2, "name": "javascript"}]
+        """
+        skills = Skill.query.order_by(Skill.Name).all()
+        skills_data = [
+            {'id': skill.SkillId, 'name': skill.Name} for skill in skills
+        ]
+
+        return jsonify(skills_data)
+
+    @app.route('/skills', methods=['POST'])
+    @require_auth
+    def add_skill():
+        """
+        Add a new possible skill to the database. Requires ADMIN role.
+        """
+        user = request.local_user
+        if not user.is_admin():
+            return jsonify({
+                'error': 'Forbidden',
+                'message': 'You do not have permission to add new skills.'
+            }), 403
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Bad Request', 'message': 'No JSON data provided.'}), 400
+
+        skill_name = data.get('name')
+        if not skill_name or not isinstance(skill_name, str) or not skill_name.strip():
+            return jsonify({'error': 'Bad Request', 'message': 'Skill name must be a non-empty string.'}), 400
+
+        # Normalize name for checking and creation
+        normalized_name = skill_name.strip().lower()
+
+        # Check for duplicates (case-insensitive)
+        existing_skill = Skill.query.filter(func.lower(Skill.Name) == normalized_name).first()
+        if existing_skill:
+            return jsonify({
+                'error': 'Conflict',
+                'message': f'Skill "{existing_skill.Name}" already exists.'
+            }), 409
+
+        # Create and save the new skill, preserving original casing
+        new_skill = Skill(Name=skill_name.strip())
+        db.session.add(new_skill)
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Skill added successfully.',
+            'skill': {
+                'id': new_skill.SkillId,
+                'name': new_skill.Name
+            }
+        }), 201
 
     #########################  workshops
     #########################################################################
