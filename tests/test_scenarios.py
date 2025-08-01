@@ -146,9 +146,9 @@ def mock_authed_user(mock_get_supabase, user: Users):
 class TestEditWorkshop:
     """tests related to editing a workshop."""
 
-    @patch('routes._update_waitlisted_participants')
+    @patch('routes._notify_waitlisted_participants')
     @patch('auth.get_supabase')
-    def test_workshop_leader_can_edit_own_workshop(self, mock_get_supabase, mock_update_waitlisted, client,
+    def test_workshop_leader_can_edit_own_workshop(self, mock_get_supabase, mock_notify_waitlisted, client,
                                                    init_database):
         """
         GIVEN a workshop leader is authenticated
@@ -186,7 +186,7 @@ class TestEditWorkshop:
         assert updated_workshop.MaxCapacity == 15
 
         # called because capacity increased
-        mock_update_waitlisted.assert_called_once_with(workshop_id)
+        mock_notify_waitlisted.assert_called_once_with(workshop_id)
 
     @patch('auth.get_supabase')
     def test_workshop_leader_cannot_edit_other_workshop(self, mock_get_supabase, client, init_database):
@@ -490,30 +490,41 @@ class TestWorkshopRegistration:
         participant = db.session.get(Users, 3)
         mock_authed_user(mock_get_supabase, participant)
 
-        # Create an overlapping workshop in the database
-        # workshop1 ends at 10:30. This one starts at 10:00.
-        overlapping_datetime = datetime(2025, 9, 10, 10, 0, tzinfo=timezone.utc)
-        overlapping_workshop = Workshop(
+        # Create overlapping workshop in the database
+        workshop1 = db.session.get(Workshop, 1)
+
+        overlapping_datetime1 = workshop1.SessionDateTime + timedelta(minutes=20)
+        overlapping_workshop1 = Workshop(
             Title="Overlapping Workshop",
-            SessionDateTime=overlapping_datetime,
+            SessionDateTime=overlapping_datetime1,
             DurationMin=60,  # 10:00 - 11:00
             MaxCapacity=10
         )
-        db.session.add(overlapping_workshop)
-        db.session.commit()
 
-        # Act
-        response = client.post(
-            f'/workshops/{overlapping_workshop.WorkshopId}/register',
-            headers={'Authorization': f'Bearer {FAKE_JWT}'}
+        overlapping_datetime2 = workshop1.SessionDateTime - timedelta(minutes=20)
+        overlapping_workshop2 = Workshop(
+            Title="Overlapping Workshop",
+            SessionDateTime=overlapping_datetime2,
+            DurationMin=60,
+            MaxCapacity=10
         )
 
-        # Assert
-        assert response.status_code == 409
-        data = response.get_json()
-        assert data['error'] == 'Conflict'
-        assert 'overlaps with another registered workshop' in data['message']
-        assert data['conflicting_workshop_id'] == 1  # workshop1
+        for overlapping_workshop in [overlapping_workshop1, overlapping_workshop2]:
+            db.session.add(overlapping_workshop)
+            db.session.commit()
+
+            # Act
+            response = client.post(
+                f'/workshops/{overlapping_workshop.WorkshopId}/register',
+                headers={'Authorization': f'Bearer {FAKE_JWT}'}
+            )
+
+            # Assert
+            assert response.status_code == 409
+            data = response.get_json()
+            assert data['error'] == 'Conflict'
+            assert 'overlaps with another registered workshop' in data['message']
+            assert data['conflicting_workshop_id'] == 1  # workshop1
 
     @patch('auth.get_supabase')
     def test_can_register_for_non_overlapping_workshop(self, mock_get_supabase, client, init_database):
@@ -549,6 +560,43 @@ class TestWorkshopRegistration:
         assert response.status_code == 200
         data = response.get_json()
         assert data['status'] == 'Signed up successfully'
+
+    # TODO: this test fails, due to change in last commit in models.py - with @hybrid_property.
+    # filter_by result comes out incorrect.
+    @patch('auth.get_supabase')
+    def test_register_for_full_workshop_adds_to_waitlist(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a workshop is at full capacity
+        WHEN another user tries to register
+        THEN they should be successfully added to the waitlist.
+        """
+        # Arrange
+        # workshop2 has a capacity of 1.
+        workshop_id = 2
+        workshop = db.session.get(Workshop, workshop_id)
+        assert workshop.MaxCapacity == 1
+        registered_count = Registration.query.filter_by(WorkshopId=workshop_id,
+                                                        Status=RegistrationStatus.REGISTERED).count()
+        waitlisted_count = Registration.query.filter_by(WorkshopId=workshop_id,
+                                                        Status=RegistrationStatus.WAITLISTED).count()
+        assert waitlisted_count == 1  # participant1 is waitlisted
+        assert registered_count == 0
+
+        # register participant_user2 to make the workshop full.
+        user_who_fills_spot_id = 4
+        full_reg = Registration(WorkshopId=workshop_id, UserId=user_who_fills_spot_id,
+                                Status=RegistrationStatus.REGISTERED)
+        db.session.add(full_reg)
+        db.session.commit()
+
+        # Verify workshop is full
+        registered_count = Registration.query.filter_by(WorkshopId=workshop_id,
+                                                        Status=RegistrationStatus.REGISTERED).count()
+        assert registered_count == workshop.MaxCapacity
+
+        # Now, participant_user1 will try to register.
+        # The fixture has this user waitlisted, so we remove that record to ensure a clean state for the test.
+        # TODO
 
 
 class TestUserSkills:
