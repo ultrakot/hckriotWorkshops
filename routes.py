@@ -1,13 +1,16 @@
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlencode, urlparse
 
 from flask import Flask, request, jsonify, abort
+from sqlalchemy import func
 
 from auth import require_auth
 from models import db, Workshop, Registration, WorkshopSkill, Skill, UserSkill, RegistrationStatus
 from config import Config
+
+ALLOWED_OVERLAP = timedelta(minutes=1)
 
 
 def init_routes(app: Flask):
@@ -29,13 +32,18 @@ def init_routes(app: Flask):
                     'GET  /auth/verify - Verify token and get user info'
                 ],
                 'user': [
-                    'GET  /user/profile - Get authenticated user profile'
+                    'GET  /user/profile - Get authenticated user profile (includes skills, workshops)',
+                    'POST /user/skills  - Post authenticated user skills'
+                ],
+                'skills': [
+                    'GET  /skills  - Get possible skills available in the system',
+                    'POST /skills  - Create a new possible skill (admin)',
                 ],
                 'workshops': [
-                    'POST /workshops - Create a new workshop',
-                    'GET  /workshops - List all workshops',
-                    'GET  /workshops/{id} - Get workshop details',
-                    'PATCH /workshops/{id} - Edit workshop (leader/admin)',
+                    'GET    /workshops - List all workshops',
+                    'GET    /workshops/{id} - Get workshop details',
+                    'POST   /workshops - Create a new workshop (admin)',
+                    'PATCH  /workshops/{id} - Edit workshop (leader/admin)',
 
                     # user registration
                     'POST   /workshops/{id}/register  - Register (sign up) for a workshop',
@@ -363,6 +371,140 @@ def init_routes(app: Flask):
             'skills': skills_data
         })
 
+    #########################  skills
+    #########################################################################
+
+    @app.route('/user/skills', methods=['POST'])
+    @require_auth
+    def set_user_skills():
+        """
+        Set or replace the current user's skills.
+
+        Expects a JSON list of objects, each with "name" and "grade".
+        for example:
+        skills_payload = [ {"name": "python", "grade": 4}, {"name": "javascript", "grade": 2} ]
+        """
+        user = request.local_user
+        data = request.get_json()
+
+        # --- Validation ---
+        if not isinstance(data, list):
+            return jsonify({'error': 'Bad Request', 'message': 'Request body must be a JSON list of skills.'}), 400
+
+        # allowed skills (skill list to choose from has to be defined in advance by admin)
+        allowed_skills_query = db.session.query(Skill.Name, Skill.SkillId).all()
+        allowed_skill_map = {name.lower(): skill_id for name, skill_id in allowed_skills_query}
+
+        new_user_skills = []
+        for i, skill_data in enumerate(data):
+            if not isinstance(skill_data, dict):
+                return jsonify({'error': 'Bad Request', 'message': f'Item at index {i} is not a valid object.'}), 400
+
+            name = skill_data.get('name')
+            grade = skill_data.get('grade')
+
+            if not name or not isinstance(name, str):
+                return jsonify({'error': 'Bad Request', 'message': f'Missing or invalid skill name at index {i}.'}), 400
+            if not isinstance(grade, int):  # can add range check for grade here when decided
+                return jsonify({'error': 'Bad Request',
+                                'message': f'Grade for skill "{name}" must be an integer.'}), 400
+
+            # Check if skill allowed (case-insensitive)
+            lowercase_name = name.strip().lower()
+            skill_id = allowed_skill_map.get(lowercase_name)
+            if not skill_id:
+                return jsonify({'error': 'Bad Request', 'message': f'Skill "{name}" does not exist.'}), 400
+
+            new_user_skills.append({'UserId': user.UserId, 'SkillId': skill_id, 'Grade': grade})
+
+        # --- Database Transaction ---
+        try:
+            # Delete existing skills for user
+            UserSkill.query.filter_by(UserId=user.UserId).delete()
+
+            # Bulk insert new skills
+            if new_user_skills:
+                db.session.bulk_insert_mappings(UserSkill, new_user_skills)
+
+            db.session.commit()
+            app.logger.info(
+                f"User {user.UserId} ({user.Email}) updated their skills. New count: {len(new_user_skills)}.")
+
+        except Exception as e:
+            db.session.rollback()
+            app.logger.error(f"Error setting user skills for user {user.UserId}: {e}")
+            return jsonify({'error': 'Internal Server Error', 'message': 'Could not update skills.'}), 500
+
+        # --- Response ---
+        # Query newly created skills to return them with their names
+        final_skills = db.session.query(UserSkill).filter_by(UserId=user.UserId).all()
+        response_data = [{'name': us.skill.Name, 'grade': us.Grade} for us in final_skills]
+
+        return jsonify({
+            'message': 'User skills updated successfully.',
+            'skills': response_data
+        }), 200
+
+    @app.route('/skills', methods=['GET'])
+    @require_auth
+    def get_skills():
+        """
+        Get a list of all possible skills available in the system, ordered by name.
+
+        example response: [{"id": 1, "name": "python"}, {"id": 2, "name": "javascript"}]
+        """
+        skills = Skill.query.order_by(Skill.Name).all()
+        skills_data = [
+            {'id': skill.SkillId, 'name': skill.Name} for skill in skills
+        ]
+
+        return jsonify(skills_data)
+
+    @app.route('/skills', methods=['POST'])
+    @require_auth
+    def add_skill():
+        """
+        Add a new possible skill to the database. Requires ADMIN role.
+        """
+        user = request.local_user
+        if not user.is_admin():
+            return jsonify({
+                'error': 'Forbidden',
+                'message': 'You do not have permission to add new skills.'
+            }), 403
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Bad Request', 'message': 'No JSON data provided.'}), 400
+
+        skill_name = data.get('name')
+        if not skill_name or not isinstance(skill_name, str) or not skill_name.strip():
+            return jsonify({'error': 'Bad Request', 'message': 'Skill name must be a non-empty string.'}), 400
+
+        # Normalize name for checking and creation
+        normalized_name = skill_name.strip().lower()
+
+        # Check for duplicates (case-insensitive)
+        existing_skill = Skill.query.filter(func.lower(Skill.Name) == normalized_name).first()
+        if existing_skill:
+            return jsonify({
+                'error': 'Conflict',
+                'message': f'Skill "{existing_skill.Name}" already exists.'
+            }), 409
+
+        # Create and save the new skill, preserving original casing
+        new_skill = Skill(Name=skill_name.strip())
+        db.session.add(new_skill)
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Skill added successfully.',
+            'skill': {
+                'id': new_skill.SkillId,
+                'name': new_skill.Name
+            }
+        }), 201
+
     #########################  workshops
     #########################################################################
 
@@ -489,15 +631,12 @@ def init_routes(app: Flask):
         user = request.local_user
 
         if not user.can_manage_workshop(w_id):
-            return jsonify({
-                'error': 'Forbidden',
-                'message': 'You do not have permission to edit this workshop.'
-            }), 403
+            app.logger.warning(
+                f"Forbidden: User {user.UserId} ({user.Email}) attempted to edit workshop {w_id} without permission.")
+            return jsonify({'error': 'Forbidden', 'message': 'You do not have permission to edit this workshop.'}), 403
 
         data = request.get_json()
-        if not data:
-            return jsonify({'error': 'Bad Request', 'message': 'No data provided.'}), 400
-
+        if not data: return jsonify({'error': 'Bad Request', 'message': 'No data provided.'}), 400
         updated_fields = []
 
         if 'title' in data:
@@ -530,10 +669,13 @@ def init_routes(app: Flask):
                         'message': 'New capacity is lower than current registrations. Failed to remove participants.'
                     }), 500
 
-                _update_removed_participants(w_id, canceled_user_ids)
+                app.logger.warning(
+                    f"Capacity for workshop {w_id} reduced below registration count by user {user.UserId} ({user.Email}). Removed {diff} participants.")
+
+                _notify_removed_participants(w_id, canceled_user_ids)
 
             if new_capacity > curr_capacity:
-                _update_waitlisted_participants(w_id)
+                _notify_waitlisted_participants(w_id)
 
             workshop.MaxCapacity = new_capacity
             updated_fields.append('capacity')
@@ -545,6 +687,8 @@ def init_routes(app: Flask):
             }), 400
 
         db.session.commit()
+        app.logger.info(
+            f"User {user.UserId} ({user.Email}) updated workshop {w_id}. Fields changed: {', '.join(updated_fields)}.")
 
         return jsonify({
             'message': 'Workshop updated successfully.',
@@ -560,37 +704,36 @@ def init_routes(app: Flask):
     @app.route('/workshops/<int:w_id>/register', methods=['POST'])
     @require_auth
     def register_to_workshop(w_id):
-        w = Workshop.query.get_or_404(w_id)
-        user_id = request.local_user.UserId
+        w = Workshop.query.get_or_404(w_id, description='Workshop not found')
+        user = request.local_user
 
         # Check for any existing registration (any status)
-        existing_registration = Registration.query.filter_by(
-            UserId=user_id,
-            WorkshopId=w_id
-        ).first()
+        existing_registration = Registration.query.filter_by(UserId=user.UserId, WorkshopId=w_id).first()
 
         # If user is already registered or waitlisted, prevent duplicate signup
-        if existing_registration and existing_registration.Status in [RegistrationStatus.REGISTERED,
-                                                                      RegistrationStatus.WAITLISTED]:
-            return jsonify({
-                'error': 'Already signed up',
-                'current_status': existing_registration.Status,
-                'registered_at': existing_registration.RegisteredAt
-            }), 400
+        # --- Pre-checks for existing registrations ---
+        if existing_registration:
+            # Case 1: already registered
+            if existing_registration.Status == RegistrationStatus.REGISTERED:
+                return jsonify(
+                    {'error': 'Already signed up', 'current_status': existing_registration.Status.value}), 400
 
-        # Check scheduling conflicts
-        conflicting_workshop = _check_for_registration_overlap(user_id, w)
+            # Case 2: User is on waitlist, but workshop is still full
+            registered_count = _get_registered_count(w_id)
+            if existing_registration.Status == RegistrationStatus.WAITLISTED and registered_count >= w.MaxCapacity:
+                return jsonify({'error': 'Already on waitlist', 'current_status': existing_registration.Status.value}), 400
+
+        # --- Check for scheduling conflicts ---
+        conflicting_workshop = _check_for_registration_overlap(user.UserId, w)
         if conflicting_workshop:
-            return jsonify({
-                'error': 'Conflict',
-                'message': f'This workshop overlaps with another registered workshop: "{conflicting_workshop.Title}".',
-                'conflicting_workshop_id': conflicting_workshop.WorkshopId
-            }), 409
+            app.logger.info(
+                f"User {user.UserId} ({user.Email}) registration to workshop {w_id} blocked, reason: overlap with workshop {conflicting_workshop.WorkshopId}.")
+            return jsonify({'error': 'Conflict',
+                            'message': f'This workshop overlaps with another registered workshop: "{conflicting_workshop.Title}".',
+                            'conflicting_workshop_id': conflicting_workshop.WorkshopId}), 409
 
-        # Count current active registrations
+        # --- Determine new status and perform action ---
         registered_count = _get_registered_count(w_id)
-
-        # Determine new status based on capacity
         if registered_count >= w.MaxCapacity:
             new_status = RegistrationStatus.WAITLISTED
             message = 'Added to waitlist'
@@ -598,22 +741,23 @@ def init_routes(app: Flask):
             new_status = RegistrationStatus.REGISTERED
             message = 'Signed up successfully'
 
+        # Update existing registration (from CANCELLED or WAITLISTED) or create a new one.
         if existing_registration:
-            # Reuse existing cancelled registration
+            action = f"Updated from {existing_registration.Status.value} to {new_status.value}"
             existing_registration.Status = new_status
-            existing_registration.RegisteredAt = db.text("datetime('now')")  # Update timestamp
-            action = "Re-registered"
+            existing_registration.RegisteredAt = datetime.now(timezone.utc)  # Update timestamp on re-registration
         else:
-            # Create new registration
-            existing_registration = Registration(
-                UserId=user_id,
-                WorkshopId=w_id,
-                Status=new_status
-            )
-            db.session.add(existing_registration)
-            action = "Registered"
+            action = f"Created new registration with status {new_status.value}"
+            registration = Registration(UserId=user.UserId, WorkshopId=w_id, Status=new_status)
+            db.session.add(registration)
+            # check if workshop is full from now on, for log
+            if registered_count + 1 == w.MaxCapacity:
+                app.logger.info(f"Workshop {w_id} is now full")
 
         db.session.commit()
+        app.logger.info(
+            f"User {user.UserId} ({user.Email}) registered for workshop {w_id} with status: {new_status.value}.")
+
         return jsonify({
             'status': message,
             'action': action,
@@ -623,14 +767,17 @@ def init_routes(app: Flask):
     @app.route('/workshops/<int:w_id>/register', methods=['DELETE'])
     @require_auth
     def unregister_to_workshop(w_id):
+        user = request.local_user
         registration = Registration.query.filter_by(
-            UserId=request.local_user.UserId,
+            UserId=user.UserId,
             WorkshopId=w_id
         ).filter(Registration.Status.in_([RegistrationStatus.REGISTERED, RegistrationStatus.WAITLISTED])).first_or_404()
 
         old_status = registration.Status
         registration.Status = RegistrationStatus.CANCELLED
         db.session.commit()
+        app.logger.info(f"User {user.UserId} ({user.Email}) cancelled registration for workshop {w_id}. "
+                        f"Previous status: {old_status.value}.")
 
         return jsonify({
             'status': 'Cancelled',
@@ -712,7 +859,7 @@ def _get_registered_count(w_id):
 def _check_for_registration_overlap(user_id: int, target_workshop: Workshop) -> Optional[Workshop]:
     """
     Checks if a target workshop overlaps with any of the user's existing registered workshops.
-    (target_workshop = the Workshop object the user is trying to register for.)
+    (target_workshop = Workshop the user is trying to register for.)
 
     Returns:
         conflicting Workshop object if an overlap is found,
@@ -736,8 +883,13 @@ def _check_for_registration_overlap(user_id: int, target_workshop: Workshop) -> 
         existing_start_dt = existing_ws.SessionDateTime
         existing_end_dt = existing_start_dt + timedelta(minutes=existing_ws.DurationMin)
 
-        # overlap condition: (StartA < EndB) and (EndA > StartB)
-        if (target_start_dt < existing_end_dt) and (target_end_dt > existing_start_dt):
+        # overlap duration
+        latest_start = max(target_start_dt, existing_start_dt)
+        earliest_end = min(target_end_dt, existing_end_dt)
+        overlap_duration: timedelta = earliest_end - latest_start
+
+        # Check if calculated overlap is greater than the allowed buffer
+        if overlap_duration > ALLOWED_OVERLAP:
             return existing_ws  # Found a conflict
 
     return None  # No conflicts found
@@ -763,7 +915,7 @@ def _remove_participants_from_workshop(w_id, num_participants):
     return user_ids
 
 
-def _update_waitlisted_participants(w_id):
+def _notify_waitlisted_participants(w_id):
     """email waitlisted participants of workshop (if any):
       capacity+, can now register"""
     # TODO
@@ -771,7 +923,7 @@ def _update_waitlisted_participants(w_id):
     pass
 
 
-def _update_removed_participants(w_id, canceled_user_ids):
+def _notify_removed_participants(w_id, canceled_user_ids):
     """email removed participants of workshop:
     capacity-, registration canceled"""
     # TODO

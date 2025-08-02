@@ -1,11 +1,6 @@
-"""
-Cleaned Models - Removed unnecessary lookup tables
-"""
 import enum
-from datetime import datetime, timezone
 
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy import func
 
 db = SQLAlchemy()
@@ -35,19 +30,9 @@ class UserRole(str, enum.Enum):
 
 class RegistrationStatus(str, enum.Enum):
     """Possible statuses for a workshop registration."""
-    REGISTERED = 'Registered'
-    WAITLISTED = 'Waitlisted'
-    CANCELLED = 'Cancelled'
-    
-    @property
-    def status_id(self) -> int:
-        """Returns the integer ID for the status."""
-        status_map = {
-            RegistrationStatus.REGISTERED: 1,
-            RegistrationStatus.WAITLISTED: 2,
-            RegistrationStatus.CANCELLED: 3
-        }
-        return status_map[self]
+    REGISTERED = 'REGISTERED'
+    WAITLISTED = 'WAITLISTED'
+    CANCELLED = 'CANCELLED'
 
 
 class Users(db.Model):
@@ -55,36 +40,10 @@ class Users(db.Model):
     UserId = db.Column(db.Integer, primary_key=True, autoincrement=True)
     Name = db.Column(db.Text, nullable=False)
     Email = db.Column(db.Text, unique=True, nullable=False)
-    _role = db.Column('Role', db.Integer, nullable=False, default=1)
+    Role = db.Column(db.Enum(UserRole), nullable=False, default=UserRole.PARTICIPANT)
     CreatedDate = db.Column(db.DateTime, nullable=False, default=func.now())
     SupabaseId = db.Column(db.Text, unique=True, nullable=True)
     AvatarUrl = db.Column(db.Text, nullable=True)
-
-    # Hybrid property for Role conversion
-    @hybrid_property
-    def Role(self):
-        """Convert integer role to UserRole enum."""
-        role_mapping = {
-            1: UserRole.PARTICIPANT,
-            2: UserRole.WORKSHOP_LEADER,
-            100: UserRole.ADMIN
-        }
-        return role_mapping.get(self._role, UserRole.PARTICIPANT)
-    
-    @Role.setter
-    def Role(self, value):
-        """Set role from UserRole enum or integer."""
-        if isinstance(value, UserRole):
-            enum_to_int = {
-                UserRole.PARTICIPANT: 1,
-                UserRole.WORKSHOP_LEADER: 2,
-                UserRole.ADMIN: 100
-            }
-            self._role = enum_to_int[value]
-        elif isinstance(value, int):
-            self._role = value
-        else:
-            raise ValueError(f"Role must be UserRole enum or integer, got {type(value)}")
 
     # Relationships
     registrations = db.relationship('Registration', back_populates='user')
@@ -115,6 +74,7 @@ class Users(db.Model):
         """Check if user can manage a specific workshop (admin or assigned leader)"""
         return self.is_admin() or self.is_workshop_leader_for(workshop_id)
 
+    # other methods
     def get_led_workshops(self):
         """Get all workshops this user leads"""
         return db.session.query(Workshop).join(WorkshopLeader).filter(
@@ -161,9 +121,10 @@ class Workshop(db.Model):
 
 class WorkshopLeader(db.Model):
     __tablename__ = 'WorkshopLeader'
+    # composite key
     WorkshopId = db.Column(db.Integer, db.ForeignKey('Workshop.WorkshopId'), primary_key=True, index=True)
     LeaderId = db.Column(db.Integer, db.ForeignKey('Users.UserId'), primary_key=True, index=True)
-    AssignedAt = db.Column(db.DateTime, nullable=False, default=func.now())
+    AssignedAt = db.Column(db.Text, nullable=False, default=db.text("datetime('now')"))
 
     # Relationships
     workshop = db.relationship('Workshop', back_populates='leaders')
@@ -187,41 +148,13 @@ class Registration(db.Model):
         db.UniqueConstraint('UserId', 'WorkshopId', name='unique_user_workshop_registration'),
         db.Index('idx_registration_workshop_status', 'WorkshopId', 'Status'),
     )
-    
+
     RegistrationId = db.Column(db.Integer, primary_key=True, autoincrement=True)
     WorkshopId = db.Column(db.Integer, db.ForeignKey('Workshop.WorkshopId'), nullable=False)
     UserId = db.Column(db.Integer, db.ForeignKey('Users.UserId'), nullable=False)
-    RegisteredAt = db.Column(db.DateTime, nullable=False, default=func.now())
-    _status = db.Column('Status', db.Integer, nullable=False, default=1)
-
-    # Hybrid property for Status conversion
-    @hybrid_property
-    def Status(self):
-        """Convert integer status to RegistrationStatus enum."""
-        status_mapping = {
-            1: RegistrationStatus.REGISTERED,
-            2: RegistrationStatus.WAITLISTED,
-            3: RegistrationStatus.CANCELLED
-        }
-        return status_mapping.get(self._status, RegistrationStatus.REGISTERED)
-    
-    @Status.setter
-    def Status(self, value):
-        """Set status from RegistrationStatus enum or integer."""
-        if isinstance(value, RegistrationStatus):
-            enum_to_int = {
-                RegistrationStatus.REGISTERED: 1,
-                RegistrationStatus.WAITLISTED: 2,
-                RegistrationStatus.CANCELLED: 3
-            }
-            self._status = enum_to_int[value]
-        elif isinstance(value, int):
-            self._status = value
-        else:
-            raise ValueError(f"Status must be RegistrationStatus enum or integer, got {type(value)}")
+    RegisteredAt = db.Column(db.Text, nullable=False, default=db.text("datetime('now')"))
+    Status = db.Column(db.Enum(RegistrationStatus), nullable=False)
 
     # Relationships
     workshop = db.relationship('Workshop', back_populates='registrations')
     user = db.relationship('Users', back_populates='registrations')
-
-# REMOVED: RoleTypes and StatusTypes tables (unused lookup tables)
