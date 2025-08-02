@@ -655,7 +655,7 @@ class TestWorkshopRegistration:
         response_waitlist = client.post(f'/workshops/{workshop_id}/register',
                                         headers={'Authorization': f'Bearer {FAKE_JWT}'})
         assert response_waitlist.status_code == 200
-        assert response_waitlist.get_json()['workshop_status'] == 'Waitlisted'
+        assert response_waitlist.get_json()['workshop_status'] == RegistrationStatus.WAITLISTED
 
         # Verify state: 1 registered, 1 waitlisted
         reg_count = Registration.query.filter_by(WorkshopId=workshop_id, Status=RegistrationStatus.REGISTERED).count()
@@ -677,7 +677,7 @@ class TestWorkshopRegistration:
         assert response_register.status_code == 200
         data = response_register.get_json()
         assert data['status'] == 'Signed up successfully'
-        assert data['workshop_status'] == 'Registered'
+        assert data['workshop_status'] == RegistrationStatus.REGISTERED
 
         # Verify in the database that the user's status is now REGISTERED.
         final_reg = Registration.query.filter_by(UserId=user2.UserId, WorkshopId=workshop_id).one()
