@@ -2,6 +2,14 @@
 
 A Flask-based REST API server with Google OAuth authentication via Supabase, workshop management, and user registration system.
 
+## ✨ Recent Updates
+
+- 🐳 **Full Docker Support** with production-ready configuration
+- 🎯 **Azure SQL Database Integration** with smart driver selection (pymssql/pyodbc)
+- 🔧 **Smart Environment Detection** - automatically uses optimal database drivers
+- 📦 **GitHub Container Registry** - published as `ghcr.io/ultrakot/hckr-app`
+- 🚀 **Production Optimized** - enhanced error handling and logging
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -54,10 +62,24 @@ New-Item .env -ItemType File
 touch .env
 ```
 
-Add your Supabase credentials to `.env`:
+Add your credentials to `.env`:
 ```env
+# Supabase Authentication
 SUPABASE_URL=https://your-project-id.supabase.co
 SUPABASE_KEY=your-anon-key-here
+
+# Database Configuration (choose one)
+# For SQLite (Development):
+DB_TYPE=sqlite
+DB_FOLDER=./data
+DB_NAME=hackeriot.db
+
+# For Azure SQL (Production):
+# DB_TYPE=azure
+# AZURE_SQL_SERVER=your-server.database.windows.net
+# AZURE_SQL_DATABASE=your-database-name
+# AZURE_SQL_USERNAME=your-username
+# AZURE_SQL_PASSWORD=your-password
 ```
 
 **🔑 How to get Supabase credentials:**
@@ -79,7 +101,7 @@ python init_sqlite.py
 python app.py
 ```
 
-The API will be available at: `http://localhost:5000`
+The API will be available at: `http://localhost:8000`
 
 ## 🔧 Development Setup
 
@@ -113,7 +135,7 @@ export SUPABASE_KEY="your-anon-key-here"
 
 ### 1. Test API Connection
 ```bash
-curl http://localhost:5000/api
+curl http://localhost:8000/api
 ```
 
 Expected response:
@@ -131,7 +153,7 @@ Expected response:
 
 ### 2. Test Supabase Connection
 ```bash
-curl http://localhost:5000/auth/config
+curl http://localhost:8000/auth/config
 ```
 
 Expected response:
@@ -144,7 +166,7 @@ Expected response:
 
 ### 3. Test OAuth URL Generation
 ```bash
-curl http://localhost:5000/auth/google/url
+curl http://localhost:8000/auth/google/url
 ```
 
 Should return a Google OAuth URL.
@@ -176,21 +198,21 @@ Should return a Google OAuth URL.
 
 1. **Get OAuth URL:**
    ```bash
-   curl http://localhost:5000/auth/google/url
+   curl http://localhost:8000/auth/google/url
    ```
 
 2. **User signs in** with Google via the returned URL
 
 3. **Extract token** from callback:
    ```bash
-   curl -X POST http://localhost:5000/auth/extract-token \
+   curl -X POST http://localhost:8000/auth/extract-token \
      -H "Content-Type: application/json" \
      -d '{"callback_url": "callback_url_with_token"}'
    ```
 
 4. **Use token** in API requests:
    ```bash
-   curl http://localhost:5000/user/profile \
+   curl http://localhost:8000/user/profile \
      -H "Authorization: Bearer YOUR_JWT_TOKEN"
    ```
 
@@ -208,15 +230,30 @@ Should return a Google OAuth URL.
 
 ## 🗃️ Database
 
-The project uses SQLite with the following tables:
+The project supports both **SQLite (development)** and **Azure SQL Database (production)** with smart driver selection:
+
+### Smart Driver Selection
+- **Development**: Uses `pyodbc` with ODBC Driver 17 for SQL Server
+- **Production**: Automatically uses `pymssql` (lightweight, fewer dependencies)
+- **Manual Override**: Set `AZURE_SQL_DRIVER_TYPE=pymssql` or `pyodbc`
+
+### Database Tables
 - `Users` - User profiles
-- `Workshop` - Workshop information
+- `Workshop` - Workshop information  
 - `Registration` - Workshop registrations
 - `Skill` - Available skills
 - `UserSkill` - User skill associations
 - `WorkshopSkill` - Workshop skill requirements
 
-Database is automatically created when running `init_sqlite.py`.
+### SQLite Setup (Development)
+```bash
+python init_sqlite.py
+```
+
+### Azure SQL Setup (Production)
+- Configure environment variables in `.env`
+- Database tables work with existing schema
+- Automatic connection pooling and optimization
 
 ## 🧰 Troubleshooting
 
@@ -232,7 +269,7 @@ python -m pip install virtualenv
 2. Verify Supabase URL format: `https://your-id.supabase.co`
 3. Test credentials:
    ```bash
-   curl http://localhost:5000/auth/config
+   curl http://localhost:8000/auth/config
    ```
 
 ### Import Errors
@@ -243,24 +280,130 @@ pip install -r requirements.txt
 
 ### Port Already in Use
 ```bash
-# Kill process using port 5000 (Windows)
-netstat -ano | findstr :5000
+# Kill process using port 8000 (Windows)
+netstat -ano | findstr :8000
 taskkill /PID <PID> /F
 
-# Kill process using port 5000 (macOS/Linux)
-lsof -ti:5000 | xargs kill
+# Kill process using port 8000 (macOS/Linux)
+lsof -ti:8000 | xargs kill
 ```
 
 ## 🚀 Deployment
+
+### 🐳 Docker Deployment (Recommended)
+
+The application includes a production-ready Docker setup with optimized Azure SQL support.
+
+#### Quick Docker Setup
+
+**1. Build Image:**
+```bash
+docker build -t flask-pymssql-app .
+```
+
+**2. Create Environment File:**
+Create `.env` file with your production credentials:
+```env
+# Azure SQL Configuration
+AZURE_SQL_SERVER=your-server.database.windows.net
+AZURE_SQL_DATABASE=your-database-name
+AZURE_SQL_USERNAME=your-username
+AZURE_SQL_PASSWORD=your-password
+
+# Supabase Authentication
+SUPABASE_URL=https://your-project-id.supabase.co
+SUPABASE_KEY=your-anon-key-here
+```
+
+**3. Run Container:**
+```bash
+docker run -d --name flask-app -p 8000:8000 --env-file .env flask-pymssql-app
+```
+
+#### Docker Features
+- ✅ **Smart Driver Selection**: Automatically uses `pymssql` in production
+- ✅ **Optimized Dependencies**: Includes SQL Server ODBC Driver 17 + tools
+- ✅ **Production Ready**: Gunicorn WSGI server with proper configuration
+- ✅ **Multi-Database Support**: SQLite for development, Azure SQL for production
+- ✅ **Security**: Environment-based credential management
+
+#### Published Image
+The application is available on GitHub Container Registry:
+```bash
+# Pull and run published image
+docker run -d --name flask-app -p 8000:8000 --env-file .env ghcr.io/ultrakot/hckr-app:latest
+```
+
+#### Docker Management Commands
+```bash
+# View logs
+docker logs flask-app
+
+# Stop container  
+docker stop flask-app
+
+# Remove container
+docker rm flask-app
+
+# Clean up
+docker system prune -a
+```
 
 ### Azure Functions
 For serverless deployment, see deployment documentation.
 
 ### Environment Variables for Production
 Set these in your production environment:
-- `SUPABASE_URL`
-- `SUPABASE_KEY`
-- `FLASK_ENV=production`
+- `SUPABASE_URL` - Supabase project URL
+- `SUPABASE_KEY` - Supabase anon key
+- `FLASK_ENV=production` - Enables pymssql driver selection
+- `DB_TYPE=azure` - Use Azure SQL Database
+- `AZURE_SQL_SERVER` - Azure SQL server name
+- `AZURE_SQL_DATABASE` - Database name
+- `AZURE_SQL_USERNAME` - Database username
+- `AZURE_SQL_PASSWORD` - Database password
+- `AZURE_SQL_DRIVER_TYPE` - Optional: Force specific driver (pymssql/pyodbc)
+
+## 🏗️ Technical Architecture
+
+### Database Driver Selection
+The application automatically selects the optimal database driver based on environment:
+
+- **Development** (`FLASK_ENV=development`): Uses `pyodbc` with ODBC Driver 17
+  - Full compatibility with SQL Server Management Studio
+  - Comprehensive debugging capabilities
+  - Windows-optimized performance
+
+- **Production** (`FLASK_ENV=production`): Uses `pymssql` 
+  - Lightweight, fewer system dependencies
+  - Better Docker container compatibility
+  - Direct TDS protocol connection
+  - Optimal for cloud deployments
+
+### Connection String Formats
+
+**pymssql (Production):**
+```
+mssql+pymssql://username@server:password@server.database.windows.net/database?timeout=30&charset=utf8
+```
+
+**pyodbc (Development):**
+```
+mssql+pyodbc://username:password@server.database.windows.net/database?driver=ODBC+Driver+17+for+SQL+Server&timeout=30&Encrypt=yes&TrustServerCertificate=no
+```
+
+### Docker Architecture
+- **Base Image**: `python:3.11-slim-bullseye`
+- **Dependencies**: Optimized for both SQLite and Azure SQL
+- **WSGI Server**: Gunicorn with sync workers
+- **Port**: 8000 (configurable via `PORT` environment variable)
+- **Health Monitoring**: Built-in connection testing and error handling
+
+### Key Files
+- `db_selector.py` - Smart database driver selection logic
+- `Dockerfile` - Production-ready container configuration  
+- `requirements.txt` - Full dependencies (includes both drivers)
+- `requirements-docker.txt` - Docker-optimized dependencies
 
 ## 📚 Documentation
 

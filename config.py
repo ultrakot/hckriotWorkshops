@@ -13,7 +13,7 @@ class Config:
     
     # Production URLs (configurable via environment variables)
     FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")  # Frontend callback URL
-    API_URL = os.environ.get("API_URL", "http://localhost:5000")  # API base URL
+    API_URL = os.environ.get("API_URL", "http://localhost:8000")  # API base URL
     
     # Database - Uses DatabaseSelector to choose SQLite or Azure SQL  
     SQLALCHEMY_TRACK_MODIFICATIONS = False
