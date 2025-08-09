@@ -530,7 +530,12 @@ def init_routes(app: Flask):
             result.append({
                 'id': w.WorkshopId,
                 'title': w.Title,
-                'vacant': vacant
+                'description': w.Description,
+                'startTime': w.SessionDateTime.strftime('%H:%M'),
+                'durationMin': w.DurationMin,
+                'vacant': vacant,
+                'prerequisite': w.Prerequisite,
+                'installetion': w.Installetion
             })
         return jsonify(result)
 
@@ -547,10 +552,11 @@ def init_routes(app: Flask):
             'id': w.WorkshopId,
             'title': w.Title,
             'description': w.Description,
-            'session_datetime': w.SessionDateTime.isoformat(),
-            'duration_mins': w.DurationMin,
-            'capacity': w.MaxCapacity,
-            'vacant': vacant
+            'startTime': w.SessionDateTime.strftime('%H:%M'),
+            'durationMin': w.DurationMin,
+            'vacant': vacant,
+            'prerequisite': w.Prerequisite,
+            'installetion': w.Installetion
         })
 
     @app.route('/workshops', methods=['POST'])

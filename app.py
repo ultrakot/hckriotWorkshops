@@ -24,23 +24,27 @@ def create_app(config_object=None):
     
     app.config.from_object(config_object)
     
-    # Enable CORS for production frontend integration
-    # Only allow specific origins for security
+    # Enable CORS with configurable origins and all HTTP methods
     cors_origins = [
         config_object.FRONTEND_URL,
-        "http://localhost:3000",   # Development frontend
-        "https://localhost:3000"   # HTTPS development
+        "http://localhost:5173",   # Development frontend
+        "http://localhost:5173"   # HTTPS development
     ]    
     
-    # Add additional allowed origins from environment variable
-    additional_origins = os.environ.get('CORS_ORIGINS', '').split(',')
-    cors_origins.extend([origin.strip() for origin in additional_origins if origin.strip()])
+    # Add additional allowed origins from environment variable (comma-separated list)
+    cors_env_origins = os.environ.get('CORS_ORIGINS', '')
+    if cors_env_origins:
+        additional_origins = [origin.strip() for origin in cors_env_origins.split(',') if origin.strip()]
+        cors_origins.extend(additional_origins)
     
-    # Configure CORS with full CRUD support
+    # Remove duplicates while preserving order
+    cors_origins = list(dict.fromkeys(cors_origins))
+    
+    # Configure CORS with all HTTP methods support
     CORS(app, 
          origins=cors_origins, 
          supports_credentials=True,
-         methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+         methods="*",  # Allow all HTTP methods (GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD, etc.)
          allow_headers=['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
          expose_headers=['Content-Range', 'X-Content-Range'])
 

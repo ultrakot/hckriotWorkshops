@@ -112,6 +112,8 @@ class Workshop(db.Model):
     SessionDateTime = db.Column(db.DateTime(timezone=True), nullable=False)
     DurationMin = db.Column(db.Integer, nullable=False)
     MaxCapacity = db.Column(db.Integer, nullable=False)
+    Prerequisite = db.Column(db.Text, nullable=False, default="")
+    Installetion = db.Column(db.Text, nullable=False, default="")
 
     # Relationships
     registrations = db.relationship('Registration', back_populates='workshop')
