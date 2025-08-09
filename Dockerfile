@@ -42,6 +42,10 @@ ENV DB_TYPE=azure
 ENV FLASK_ENV=production
 ENV DEBUG=False
 
+# CORS Configuration for React frontend
+ENV FRONTEND_URL=http://localhost:3000
+# ENV CORS_ORIGINS=https://your-production-domain.com,https://your-staging-domain.com
+
 # Azure SQL credentials - UNCOMMENT and set these OR pass at runtime:
 # ENV AZURE_SQL_SERVER=your-server.database.windows.net
 # ENV AZURE_SQL_DATABASE=your-database-name

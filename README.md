@@ -4,6 +4,7 @@ A Flask-based REST API server with Google OAuth authentication via Supabase, wor
 
 ## ✨ Recent Updates
 
+- 🌐 **Enhanced CORS Support** - Full CRUD operations (GET, POST, PUT, DELETE, PATCH) with React frontend integration
 - 🐳 **Full Docker Support** with production-ready configuration
 - 🎯 **Azure SQL Database Integration** with smart driver selection (pymssql/pyodbc)
 - 🔧 **Smart Environment Detection** - automatically uses optimal database drivers
@@ -80,6 +81,10 @@ DB_NAME=hackeriot.db
 # AZURE_SQL_DATABASE=your-database-name
 # AZURE_SQL_USERNAME=your-username
 # AZURE_SQL_PASSWORD=your-password
+
+# CORS Configuration for React Frontend
+FRONTEND_URL=http://localhost:3000
+# CORS_ORIGINS=https://your-staging-domain.com,https://your-production-domain.com
 ```
 
 **🔑 How to get Supabase credentials:**
@@ -216,6 +221,99 @@ Should return a Google OAuth URL.
      -H "Authorization: Bearer YOUR_JWT_TOKEN"
    ```
 
+## 🌐 React Frontend Integration
+
+The API is configured with CORS support for seamless React frontend integration.
+
+### CORS Configuration
+
+The server supports:
+- ✅ **All HTTP Methods**: GET, POST, PUT, DELETE, PATCH, OPTIONS
+- ✅ **Authentication Headers**: Authorization, Content-Type, etc.
+- ✅ **Credentials Support**: Cookies and authentication tokens
+- ✅ **Multiple Origins**: Development and production environments
+
+### Environment Variables for CORS
+
+```env
+# Main frontend URL (required)
+FRONTEND_URL=http://localhost:3000
+
+# Additional allowed origins (optional)
+CORS_ORIGINS=https://staging.yourdomain.com,https://test.yourdomain.com
+```
+
+### React API Client Example
+
+```javascript
+// API configuration
+const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
+// GET request
+const getWorkshops = async () => {
+  const response = await fetch(`${apiUrl}/workshops`, {
+    method: 'GET',
+    credentials: 'include',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  return response.json();
+};
+
+// POST request (Create workshop)
+const createWorkshop = async (workshopData) => {
+  const response = await fetch(`${apiUrl}/workshops`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(workshopData),
+  });
+  return response.json();
+};
+
+// DELETE request (Cancel registration)
+const cancelRegistration = async (workshopId) => {
+  const response = await fetch(`${apiUrl}/workshops/${workshopId}/register`, {
+    method: 'DELETE',
+    credentials: 'include',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  return response.json();
+};
+
+// PATCH request (Update workshop)
+const updateWorkshop = async (workshopId, updateData) => {
+  const response = await fetch(`${apiUrl}/workshops/${workshopId}`, {
+    method: 'PATCH',
+    credentials: 'include',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(updateData),
+  });
+  return response.json();
+};
+```
+
+### CORS Troubleshooting
+
+If you encounter CORS errors:
+
+1. **Check Frontend URL**: Ensure `FRONTEND_URL` matches your React app's URL
+2. **Verify Origins**: Add additional origins to `CORS_ORIGINS` if needed
+3. **Development Setup**: Default `http://localhost:3000` should work for React dev server
+4. **Production Setup**: Set `FRONTEND_URL` to your production domain
+5. **Restart Server**: CORS changes require server restart
+
 ### Key Endpoints
 
 | Method | Endpoint | Purpose | Auth Required |
@@ -225,8 +323,10 @@ Should return a Google OAuth URL.
 | POST | `/auth/extract-token` | Extract token from callback | No |
 | GET | `/user/profile` | Get user profile | Yes |
 | GET | `/workshops` | List workshops | Yes |
+| POST | `/workshops` | Create new workshop | Yes |
 | POST | `/workshops/{workshop_id}/register` | Register for workshop | Yes |
 | DELETE | `/workshops/{workshop_id}/register` | Cancel registration for workshop | Yes |
+| PATCH | `/workshops/{workshop_id}` | Update workshop details | Yes |
 
 ## 🗃️ Database
 
@@ -313,6 +413,10 @@ AZURE_SQL_PASSWORD=your-password
 # Supabase Authentication
 SUPABASE_URL=https://your-project-id.supabase.co
 SUPABASE_KEY=your-anon-key-here
+
+# CORS Configuration for React Frontend
+FRONTEND_URL=https://your-react-app-domain.com
+CORS_ORIGINS=https://staging.yourdomain.com,https://test.yourdomain.com
 ```
 
 **3. Run Container:**
@@ -321,6 +425,7 @@ docker run -d --name flask-app -p 8000:8000 --env-file .env flask-pymssql-app
 ```
 
 #### Docker Features
+- ✅ **Enhanced CORS Support**: Full CRUD operations for React frontend integration
 - ✅ **Smart Driver Selection**: Automatically uses `pymssql` in production
 - ✅ **Optimized Dependencies**: Includes SQL Server ODBC Driver 17 + tools
 - ✅ **Production Ready**: Gunicorn WSGI server with proper configuration
@@ -363,6 +468,8 @@ Set these in your production environment:
 - `AZURE_SQL_USERNAME` - Database username
 - `AZURE_SQL_PASSWORD` - Database password
 - `AZURE_SQL_DRIVER_TYPE` - Optional: Force specific driver (pymssql/pyodbc)
+- `FRONTEND_URL` - React frontend URL for CORS (e.g., https://yourdomain.com)
+- `CORS_ORIGINS` - Additional allowed origins, comma-separated
 
 ## 🏗️ Technical Architecture
 

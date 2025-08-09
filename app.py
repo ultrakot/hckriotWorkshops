@@ -36,7 +36,13 @@ def create_app(config_object=None):
     additional_origins = os.environ.get('CORS_ORIGINS', '').split(',')
     cors_origins.extend([origin.strip() for origin in additional_origins if origin.strip()])
     
-    CORS(app, origins=cors_origins, supports_credentials=True)
+    # Configure CORS with full CRUD support
+    CORS(app, 
+         origins=cors_origins, 
+         supports_credentials=True,
+         methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+         allow_headers=['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+         expose_headers=['Content-Range', 'X-Content-Range'])
 
     # Initialize database with connection pool settings if configured
     if hasattr(config_object, 'SQLALCHEMY_ENGINE_OPTIONS') and config_object.SQLALCHEMY_ENGINE_OPTIONS:
