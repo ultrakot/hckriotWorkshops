@@ -7,6 +7,7 @@ Tests real-world usage patterns and edge cases.
 # Fix imports from parent directory
 import sys
 import os
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
@@ -28,6 +29,18 @@ class TestConfig:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     # note: can set to True to see SQL queries being executed
     SQLALCHEMY_ECHO = False
+
+    @classmethod
+    def get_db_info(cls):
+        """
+        Provides database info for the test environment, satisfying
+        the interface expected by the application.
+        """
+        return {
+            'db_type': 'sqlite_in_memory',
+            'database_url': cls.SQLALCHEMY_DATABASE_URI,
+            'status': 'configured_for_testing'
+        }
 
 
 @pytest.fixture(scope='module')
@@ -55,9 +68,11 @@ def init_database(app):
         # Create Users with different roles
         admin_user = Users(UserId=1, Name='Admin User', Email='admin@test.com', Role=UserRole.ADMIN)
         leader_user = Users(UserId=2, Name='Leader User', Email='leader@test.com', Role=UserRole.WORKSHOP_LEADER)
-        participant_user1 = Users(UserId=3, Name='Participant User 1', Email='participant1@test.com', Role=UserRole.PARTICIPANT)
-        participant_user2 = Users(UserId=4, Name='Participant User 2', Email='participant2@test.com', Role=UserRole.PARTICIPANT)
-        db.session.add_all([admin_user, leader_user, participant_user1])
+        participant_user1 = Users(UserId=3, Name='Participant User 1', Email='participant1@test.com',
+                                  Role=UserRole.PARTICIPANT)
+        participant_user2 = Users(UserId=4, Name='Participant User 2', Email='participant2@test.com',
+                                  Role=UserRole.PARTICIPANT)
+        db.session.add_all([admin_user, leader_user, participant_user1, participant_user2])
         db.session.flush()
 
         # Create Skills
@@ -74,12 +89,12 @@ def init_database(app):
         # Create Workshops
 
         w1_date = datetime(2025, 9, 10, 9, 0, tzinfo=timezone.utc)
-        w2_date = w1_date + timedelta(hours=1)
+        w2_date = w1_date + timedelta(hours=1.5)
         w3_date = w1_date + timedelta(hours=3)
         workshop1 = Workshop(WorkshopId=1, Title='workshop1 init', Description='A beginner workshop.', MaxCapacity=10,
                              SessionDateTime=w1_date, DurationMin=90)
         workshop2 = Workshop(WorkshopId=2, Title='workshop2 init', Description='A deep-dive workshop.', MaxCapacity=1,
-                             SessionDateTime=w2_date, DurationMin=180)
+                             SessionDateTime=w2_date, DurationMin=60)
         workshop3 = Workshop(WorkshopId=3, Title='workshop3 init', Description='workshop3 description.', MaxCapacity=15,
                              SessionDateTime=w3_date, DurationMin=120)
         db.session.add_all([workshop1, workshop2, workshop3])
@@ -131,9 +146,9 @@ def mock_authed_user(mock_get_supabase, user: Users):
 class TestEditWorkshop:
     """tests related to editing a workshop."""
 
-    @patch('routes._update_waitlisted_participants')
+    @patch('routes._notify_waitlisted_participants')
     @patch('auth.get_supabase')
-    def test_workshop_leader_can_edit_own_workshop(self, mock_get_supabase, mock_update_waitlisted, client,
+    def test_workshop_leader_can_edit_own_workshop(self, mock_get_supabase, mock_notify_waitlisted, client,
                                                    init_database):
         """
         GIVEN a workshop leader is authenticated
@@ -171,7 +186,7 @@ class TestEditWorkshop:
         assert updated_workshop.MaxCapacity == 15
 
         # called because capacity increased
-        mock_update_waitlisted.assert_called_once_with(workshop_id)
+        mock_notify_waitlisted.assert_called_once_with(workshop_id)
 
     @patch('auth.get_supabase')
     def test_workshop_leader_cannot_edit_other_workshop(self, mock_get_supabase, client, init_database):
@@ -475,30 +490,41 @@ class TestWorkshopRegistration:
         participant = db.session.get(Users, 3)
         mock_authed_user(mock_get_supabase, participant)
 
-        # Create an overlapping workshop in the database
-        # workshop1 ends at 10:30. This one starts at 10:00.
-        overlapping_datetime = datetime(2025, 9, 10, 10, 0, tzinfo=timezone.utc)
-        overlapping_workshop = Workshop(
+        # Create overlapping workshop in the database
+        workshop1 = db.session.get(Workshop, 1)
+
+        overlapping_datetime1 = workshop1.SessionDateTime + timedelta(minutes=20)
+        overlapping_workshop1 = Workshop(
             Title="Overlapping Workshop",
-            SessionDateTime=overlapping_datetime,
+            SessionDateTime=overlapping_datetime1,
             DurationMin=60,  # 10:00 - 11:00
             MaxCapacity=10
         )
-        db.session.add(overlapping_workshop)
-        db.session.commit()
 
-        # Act
-        response = client.post(
-            f'/workshops/{overlapping_workshop.WorkshopId}/register',
-            headers={'Authorization': f'Bearer {FAKE_JWT}'}
+        overlapping_datetime2 = workshop1.SessionDateTime - timedelta(minutes=20)
+        overlapping_workshop2 = Workshop(
+            Title="Overlapping Workshop",
+            SessionDateTime=overlapping_datetime2,
+            DurationMin=60,
+            MaxCapacity=10
         )
 
-        # Assert
-        assert response.status_code == 409
-        data = response.get_json()
-        assert data['error'] == 'Conflict'
-        assert 'overlaps with another registered workshop' in data['message']
-        assert data['conflicting_workshop_id'] == 1  # workshop1
+        for overlapping_workshop in [overlapping_workshop1, overlapping_workshop2]:
+            db.session.add(overlapping_workshop)
+            db.session.commit()
+
+            # Act
+            response = client.post(
+                f'/workshops/{overlapping_workshop.WorkshopId}/register',
+                headers={'Authorization': f'Bearer {FAKE_JWT}'}
+            )
+
+            # Assert
+            assert response.status_code == 409
+            data = response.get_json()
+            assert data['error'] == 'Conflict'
+            assert 'overlaps with another registered workshop' in data['message']
+            assert data['conflicting_workshop_id'] == 1  # workshop1
 
     @patch('auth.get_supabase')
     def test_can_register_for_non_overlapping_workshop(self, mock_get_supabase, client, init_database):
@@ -512,11 +538,12 @@ class TestWorkshopRegistration:
         mock_authed_user(mock_get_supabase, participant)
 
         # Create a non-overlapping
-        # workshop1 ends at 10:30. This one starts at 10:30.
-        some_datetime = datetime(2025, 9, 10, 10, 30, tzinfo=timezone.utc)
+        workshop3 = db.session.get(Workshop, 3)
+        back_to_back_datetime = workshop3.SessionDateTime + timedelta(minutes=workshop3.DurationMin)
+
         non_overlapping_workshop = Workshop(
             Title="Some Workshop",
-            SessionDateTime=some_datetime,
+            SessionDateTime=back_to_back_datetime,
             DurationMin=60,
             MaxCapacity=10
         )
@@ -533,3 +560,393 @@ class TestWorkshopRegistration:
         assert response.status_code == 200
         data = response.get_json()
         assert data['status'] == 'Signed up successfully'
+
+    # TODO: this test fails, due to change in last commit in models.py - with @hybrid_property.
+    # filter_by result comes out incorrect.
+    @patch('auth.get_supabase')
+    def test_register_for_full_workshop_adds_to_waitlist(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a workshop is at full capacity
+        WHEN another user tries to register
+        THEN they should be successfully added to the waitlist.
+        """
+        # Arrange
+        # workshop2 has a capacity of 1.
+        workshop_id = 2
+        workshop = db.session.get(Workshop, workshop_id)
+        assert workshop.MaxCapacity == 1
+        registered_count = Registration.query.filter_by(WorkshopId=workshop_id,
+                                                        Status=RegistrationStatus.REGISTERED).count()
+        waitlisted_count = Registration.query.filter_by(WorkshopId=workshop_id,
+                                                        Status=RegistrationStatus.WAITLISTED).count()
+        assert waitlisted_count == 1  # participant1 is waitlisted
+        assert registered_count == 0
+
+        # register participant_user2 to make the workshop full.
+        user_who_fills_spot_id = 4
+        full_reg = Registration(WorkshopId=workshop_id, UserId=user_who_fills_spot_id,
+                                Status=RegistrationStatus.REGISTERED)
+        db.session.add(full_reg)
+        db.session.commit()
+
+        # Verify workshop is full
+        registered_count = Registration.query.filter_by(WorkshopId=workshop_id,
+                                                        Status=RegistrationStatus.REGISTERED).count()
+        assert registered_count == workshop.MaxCapacity
+
+        # Now, participant_user1 will try to register.
+        # The fixture has this user waitlisted, so we remove that record to ensure a clean state for the test.
+        user_who_will_waitlist = db.session.get(Users, 3)
+        existing_reg = Registration.query.filter_by(UserId=user_who_will_waitlist.UserId,
+                                                    WorkshopId=workshop_id).first()
+        if existing_reg:
+            db.session.delete(existing_reg)
+            db.session.commit()
+
+        mock_authed_user(mock_get_supabase, user_who_will_waitlist)
+
+        # Act
+        response = client.post(
+            f'/workshops/{workshop_id}/register',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'}
+        )
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['status'] == 'Added to waitlist'
+        assert data['workshop_status'].lower() == 'waitlisted'
+
+        # Verify in DB that the user is now on the waitlist
+        waitlist_reg = Registration.query.filter_by(
+            UserId=user_who_will_waitlist.UserId,
+            WorkshopId=workshop_id
+        ).first()
+        assert waitlist_reg is not None
+        assert waitlist_reg.Status == RegistrationStatus.WAITLISTED
+
+
+    @patch('auth.get_supabase')
+    def test_can_register_if_waitlisted_and_capacity_increases(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a user is on the waitlist for a full workshop
+        WHEN the workshop capacity increases and the user tries to register again
+        THEN their status should be updated to REGISTERED.
+        """
+        # --- Arrange ---
+        # Use workshop2, which has a capacity of 1.
+        workshop_id = 2
+        workshop = db.session.get(Workshop, workshop_id)
+        assert workshop.MaxCapacity == 1
+
+        # Clean slate: remove any existing registrations for this workshop from the fixture.
+        Registration.query.filter_by(WorkshopId=workshop_id).delete()
+        db.session.commit()
+
+        # User 1 (ID 4) fills the only spot.
+        user1 = db.session.get(Users, 4)
+        reg1 = Registration(UserId=user1.UserId, WorkshopId=workshop_id, Status=RegistrationStatus.REGISTERED)
+        db.session.add(reg1)
+        db.session.commit()
+
+        # User 2 (ID 3) tries to register and gets put on the waitlist.
+        user2 = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, user2)
+        response_waitlist = client.post(f'/workshops/{workshop_id}/register',
+                                        headers={'Authorization': f'Bearer {FAKE_JWT}'})
+        assert response_waitlist.status_code == 200
+        assert response_waitlist.get_json()['workshop_status'] == RegistrationStatus.WAITLISTED
+
+        # Verify state: 1 registered, 1 waitlisted
+        reg_count = Registration.query.filter_by(WorkshopId=workshop_id, Status=RegistrationStatus.REGISTERED).count()
+        wait_count = Registration.query.filter_by(WorkshopId=workshop_id, Status=RegistrationStatus.WAITLISTED).count()
+        assert reg_count == 1, "A user should be registered to make the workshop full."
+        assert wait_count == 1, "Another user should be on the waitlist."
+
+        # An admin or leader increases the capacity of the workshop.
+        workshop.MaxCapacity = 2
+        db.session.commit()
+
+        # --- Act ---
+        # The waitlisted user (user2) sees the spot opened up and tries to register again.
+        mock_authed_user(mock_get_supabase, user2)  # Re-mock to be safe
+        response_register = client.post(f'/workshops/{workshop_id}/register',
+                                        headers={'Authorization': f'Bearer {FAKE_JWT}'})
+
+        # --- Assert ---
+        assert response_register.status_code == 200
+        data = response_register.get_json()
+        assert data['status'] == 'Signed up successfully'
+        assert data['workshop_status'] == RegistrationStatus.REGISTERED
+
+        # Verify in the database that the user's status is now REGISTERED.
+        final_reg = Registration.query.filter_by(UserId=user2.UserId, WorkshopId=workshop_id).one()
+        assert final_reg.Status == RegistrationStatus.REGISTERED
+
+
+class TestUserSkills:
+    """Tests for the POST /user/skills endpoint."""
+
+    @patch('auth.get_supabase')
+    def test_set_skills_for_user_with_no_skills(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a user with no skills
+        WHEN they post a valid list of skills
+        THEN their skills should be created and returned.
+        """
+        # Arrange
+        user = db.session.get(Users, 4)  # participant_user2 has no skills
+        mock_authed_user(mock_get_supabase, user)
+        skills_payload = [
+            {"name": "python", "grade": 4},
+            {"name": "javascript", "grade": 2}
+        ]
+
+        # Act
+        response = client.post(
+            '/user/skills',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'},
+            data=json.dumps(skills_payload),
+            content_type='application/json'
+        )
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['message'] == 'User skills updated successfully.'
+        assert len(data['skills']) == 2
+        response_skills_to_grade_map = {s['name']: s['grade'] for s in data['skills']}
+        assert response_skills_to_grade_map['python'] == 4
+        assert response_skills_to_grade_map['javascript'] == 2
+
+        # Verify in DB
+        user_skills_in_db = UserSkill.query.filter_by(UserId=user.UserId).all()
+        assert len(user_skills_in_db) == 2
+
+    @patch('auth.get_supabase')
+    def test_replace_existing_skills(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a user with existing skills
+        WHEN they post a new list of skills
+        THEN their old skills should be replaced by the new ones.
+        """
+        # Arrange
+        user = db.session.get(Users, 3)  # participant_user1 has one skill (python, grade 1)
+        assert len(user.skills) == 1
+        mock_authed_user(mock_get_supabase, user)
+
+        new_skills_payload = [
+            {"name": "javascript", "grade": 5}
+        ]
+
+        # Act
+        response = client.post(
+            '/user/skills',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'},
+            data=json.dumps(new_skills_payload),
+            content_type='application/json'
+        )
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert len(data['skills']) == 1
+        assert data['skills'][0]['name'] == 'javascript'
+        assert data['skills'][0]['grade'] == 5
+
+        # Verify in DB
+        user_skills_in_db = UserSkill.query.filter_by(UserId=user.UserId).all()
+        assert len(user_skills_in_db) == 1
+        assert user_skills_in_db[0].skill.Name == 'javascript'
+        assert user_skills_in_db[0].Grade == 5
+
+    @patch('auth.get_supabase')
+    def test_set_empty_list_clears_skills(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a user with existing skills
+        WHEN they post an empty list
+        THEN all their skills should be removed.
+        """
+        # Arrange
+        user = db.session.get(Users, 3)  # participant_user1 has one skill
+        assert len(user.skills) == 1
+        mock_authed_user(mock_get_supabase, user)
+
+        # Act
+        response = client.post(
+            '/user/skills',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'},
+            data=json.dumps([]),
+            content_type='application/json'
+        )
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert len(data['skills']) == 0
+
+        # Verify in DB
+        user_skills_in_db_count = UserSkill.query.filter_by(UserId=user.UserId).count()
+        assert user_skills_in_db_count == 0
+
+    @patch('auth.get_supabase')
+    def test_set_skills_with_invalid_payload(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an authenticated user
+        WHEN they post invalid data to the skills endpoint
+        THEN they should receive a 400 Bad Request error.
+        """
+        # Arrange
+        user = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, user)
+
+        invalid_payloads = [
+            ({"skill": "python"}, "must be a JSON list"),  # Not a list
+            ([{"name": "python"}], "Grade for skill"),  # Missing grade
+            ([{"grade": 3}], "Missing or invalid skill name"),  # Missing name
+            ([{"name": "python", "grade": "6"}], "must be an integer"),  # Grade
+            ([{"name": "nonexistent_skill", "grade": 3}], "does not exist"),  # Skill not in DB
+        ]
+
+        for payload, error_message in invalid_payloads:
+            # Act
+            response = client.post(
+                '/user/skills',
+                headers={'Authorization': f'Bearer {FAKE_JWT}'},
+                data=json.dumps(payload),
+                content_type='application/json'
+            )
+            # Assert
+            assert response.status_code == 400, f"Failed for payload: {payload}"
+            assert error_message in response.get_json()['message'], f"Failed for payload: {payload}"
+
+
+class TestAdminSkills:
+    """Tests for admin-only skill management endpoints."""
+
+    @patch('auth.get_supabase')
+    def test_get_all_skills(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an authenticated user
+        WHEN they request the list of all skills
+        THEN they should receive an alphabetically sorted list of skills.
+        """
+        # Arrange
+        # Any authenticated user can view the list of skills
+        participant = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, participant)
+
+        # Act
+        response = client.get('/skills', headers={'Authorization': f'Bearer {FAKE_JWT}'})
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert isinstance(data, list)
+        assert len(data) == 2
+
+        # Verify content and alphabetical order
+        assert data[0]['name'] == 'javascript'
+        assert data[1]['name'] == 'python'
+        assert 'id' in data[0]
+        assert isinstance(data[0]['id'], int)
+
+    @patch('auth.get_supabase')
+    def test_admin_can_add_new_skill(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an admin user is authenticated
+        WHEN they post a new, valid skill name
+        THEN the skill is created and returned with status 201.
+        """
+        # Arrange
+        admin = db.session.get(Users, 1)
+        mock_authed_user(mock_get_supabase, admin)
+        skill_payload = {"name": "GoLang"}
+
+        # Act
+        response = client.post(
+            '/skills',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'},
+            data=json.dumps(skill_payload),
+            content_type='application/json'
+        )
+
+        # Assert
+        assert response.status_code == 201
+        data = response.get_json()
+        assert data['message'] == 'Skill added successfully.'
+        assert data['skill']['name'] == 'GoLang'
+
+        # Verify in DB
+        new_skill = Skill.query.get(data['skill']['id'])
+        assert new_skill is not None
+        assert new_skill.Name == 'GoLang'
+
+    @patch('auth.get_supabase')
+    def test_non_admin_cannot_add_skill(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a non-admin user is authenticated
+        WHEN they attempt to add a new skill
+        THEN they receive a 403 Forbidden error.
+        """
+        # Arrange
+        leader = db.session.get(Users, 2)
+        participant = db.session.get(Users, 3)
+        skill_payload = {"name": "Unauthorized Skill"}
+
+        # Act & Assert for Leader
+        mock_authed_user(mock_get_supabase, leader)
+        response_leader = client.post('/skills', headers={'Authorization': f'Bearer {FAKE_JWT}'},
+                                      data=json.dumps(skill_payload), content_type='application/json')
+        assert response_leader.status_code == 403
+
+        # Act & Assert for Participant
+        mock_authed_user(mock_get_supabase, participant)
+        response_participant = client.post('/skills', headers={'Authorization': f'Bearer {FAKE_JWT}'},
+                                           data=json.dumps(skill_payload), content_type='application/json')
+        assert response_participant.status_code == 403
+
+    @patch('auth.get_supabase')
+    def test_cannot_add_duplicate_skill(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an admin is authenticated
+        WHEN they attempt to add a skill that already exists (case-insensitive)
+        THEN they receive a 409 Conflict error.
+        """
+        # Arrange
+        admin = db.session.get(Users, 1)
+        mock_authed_user(mock_get_supabase, admin)
+        # 'python' exists in the fixture, test with different casing
+        skill_payload = {"name": "PYTHON"}
+
+        # Act
+        response = client.post('/skills', headers={'Authorization': f'Bearer {FAKE_JWT}'},
+                               data=json.dumps(skill_payload), content_type='application/json')
+
+        # Assert
+        assert response.status_code == 409
+        assert 'already exists' in response.get_json()['message']
+
+    @patch('auth.get_supabase')
+    def test_cannot_add_skill_with_invalid_payload(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an admin is authenticated
+        WHEN they post an invalid payload
+        THEN they receive a 400 Bad Request error.
+        """
+        # Arrange
+        admin = db.session.get(Users, 1)
+        mock_authed_user(mock_get_supabase, admin)
+
+        invalid_payloads = [
+            ({}, "No JSON data"),
+            ({"name": ""}, "must be a non-empty string"),
+            ({"name": "   "}, "must be a non-empty string"),
+            ({"wrong_key": "test"}, "must be a non-empty string"),
+        ]
+
+        for payload, error_message in invalid_payloads:
+            response = client.post('/skills', headers={'Authorization': f'Bearer {FAKE_JWT}'}, data=json.dumps(payload),
+                                   content_type='application/json')
+            assert response.status_code == 400, f"Failed for payload: {payload}"
+            assert error_message in response.get_json()['message'], f"Failed for payload: {payload}"
