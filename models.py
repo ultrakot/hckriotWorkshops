@@ -45,6 +45,14 @@ class Users(db.Model):
     SupabaseId = db.Column(db.Text, unique=True, nullable=True)
     AvatarUrl = db.Column(db.Text, nullable=True)
 
+    # skills questionnaire
+    HasFilledSkillsQuestionnaire = db.Column(db.Boolean, nullable=False, default=False)
+
+    # for workshop leaders
+    # LinkedinUrl = db.Column(db.Text, nullable=True, default="")
+    # ImageUrl = db.Column(db.Text, nullable=True, default="")
+    JobTitle = db.Column(db.Text, nullable=True, default="")
+
     # Relationships
     registrations = db.relationship('Registration', back_populates='user')
     skills = db.relationship('UserSkill', back_populates='user')
@@ -113,7 +121,8 @@ class Workshop(db.Model):
     DurationMin = db.Column(db.Integer, nullable=False)
     MaxCapacity = db.Column(db.Integer, nullable=False)
     Prerequisite = db.Column(db.Text, nullable=False, default="")
-    Installetion = db.Column(db.Text, nullable=False, default="")
+    RequiredInstallations = db.Column(db.Text, nullable=False, default="")
+    Track = db.Column(db.Text, nullable=False, default="")
 
     # Relationships
     registrations = db.relationship('Registration', back_populates='workshop')
@@ -129,8 +138,8 @@ class WorkshopLeader(db.Model):
     AssignedAt = db.Column(db.Text, nullable=False, default=db.text("datetime('now')"))
 
     # Relationships
-    workshop = db.relationship('Workshop', back_populates='leaders')
-    leader = db.relationship('Users', back_populates='led_workshops')
+    workshop = db.relationship('Workshop', back_populates='leaders', lazy='joined')
+    leader = db.relationship('Users', back_populates='led_workshops', lazy='joined')
 
 
 class WorkshopSkill(db.Model):
@@ -140,8 +149,8 @@ class WorkshopSkill(db.Model):
     SkillId = db.Column(db.Integer, db.ForeignKey('Skill.SkillId'), nullable=False)
 
     # Relationships
-    workshop = db.relationship('Workshop', back_populates='skills')
-    skill = db.relationship('Skill', back_populates='workshop_skills')
+    workshop = db.relationship('Workshop', back_populates='skills', lazy='joined')
+    skill = db.relationship('Skill', back_populates='workshop_skills', lazy='joined')
 
 
 class Registration(db.Model):
@@ -158,5 +167,5 @@ class Registration(db.Model):
     Status = db.Column(db.Enum(RegistrationStatus), nullable=False)
 
     # Relationships
-    workshop = db.relationship('Workshop', back_populates='registrations')
+    workshop = db.relationship('Workshop', back_populates='registrations', lazy='joined')
     user = db.relationship('Users', back_populates='registrations')
