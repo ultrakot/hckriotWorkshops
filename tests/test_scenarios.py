@@ -17,7 +17,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from app import create_app
-from models import db, Users, Workshop, WorkshopLeader, Registration, UserRole, RegistrationStatus, Skill, UserSkill
+from models import db, Users, Workshop, WorkshopLeader, Registration, UserRole, RegistrationStatus, Skill, UserSkill, WorkshopSkill
 
 FAKE_JWT = 'fake.jwt.token'
 
@@ -29,6 +29,7 @@ class TestConfig:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     # note: can set to True to see SQL queries being executed
     SQLALCHEMY_ECHO = False
+    FRONTEND_URL = ""
 
     @classmethod
     def get_db_info(cls):
@@ -67,7 +68,13 @@ def init_database(app):
 
         # Create Users with different roles
         admin_user = Users(UserId=1, Name='Admin User', Email='admin@test.com', Role=UserRole.ADMIN)
-        leader_user = Users(UserId=2, Name='Leader User', Email='leader@test.com', Role=UserRole.WORKSHOP_LEADER)
+        leader_user = Users(
+            UserId=2, Name='Leader User', Email='leader@test.com', Role=UserRole.WORKSHOP_LEADER,
+            JobTitle='Chief Hacker',
+            LinkedinUrl='https://linkedin.com/in/leader',
+            ImageUrl='https://example.com/leader.jpg',
+            AvatarUrl='https://example.com/leader_avatar.png'
+        )
         participant_user1 = Users(UserId=3, Name='Participant User 1', Email='participant1@test.com',
                                   Role=UserRole.PARTICIPANT)
         participant_user2 = Users(UserId=4, Name='Participant User 2', Email='participant2@test.com',
@@ -99,6 +106,11 @@ def init_database(app):
                              SessionDateTime=w3_date, DurationMin=120)
         db.session.add_all([workshop1, workshop2, workshop3])
         db.session.flush()
+
+        # Link skills to workshops
+        ws_skill1 = WorkshopSkill(WorkshopId=workshop1.WorkshopId, SkillId=skill_py.SkillId)
+        ws_skill2 = WorkshopSkill(WorkshopId=workshop2.WorkshopId, SkillId=skill_js.SkillId)
+        db.session.add_all([ws_skill1, ws_skill2])
 
         # Assign leader to first workshop
         leader_assignment = WorkshopLeader(WorkshopId=workshop1.WorkshopId, LeaderId=leader_user.UserId)
@@ -436,6 +448,179 @@ class TestCreateWorkshop:
             assert error_message in response.get_json()['message'], f"Failed for payload: {payload}"
 
 
+class TestListWorkshops:
+    """Tests for the GET /workshops endpoint."""
+
+    @patch('auth.get_supabase')
+    def test_list_all_workshops(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN there are multiple workshops in the database
+        WHEN the /workshops endpoint is requested without filters
+        THEN it should return all workshops with correct vacancy counts.
+        """
+        # Arrange
+        participant = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, participant)
+
+        # Act
+        response = client.get('/workshops', headers={'Authorization': f'Bearer {FAKE_JWT}'})
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert isinstance(data, list)
+        assert len(data) == 3  # 3 workshops in fixture
+
+        # Check vacancy counts
+        workshop_data_map = {w['id']: w for w in data}
+        assert workshop_data_map[1]['vacant'] == 9  # capacity 10, 1 registered
+        assert workshop_data_map[2]['vacant'] == 1  # capacity 1, 0 registered
+        assert workshop_data_map[3]['vacant'] == 14  # capacity 15, 1 registered
+
+    @patch('auth.get_supabase')
+    def test_list_workshops_filtered_by_single_skill(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN workshops are associated with different skills
+        WHEN the /workshops endpoint is filtered by a single skill
+        THEN it should return only the workshops associated with that skill.
+        """
+        # Arrange
+        participant = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, participant)
+
+        # Act
+        response = client.get('/workshops?skill=python', headers={'Authorization': f'Bearer {FAKE_JWT}'})
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert len(data) == 1
+        assert data[0]['id'] == 1  # workshop1 requires python
+        assert data[0]['title'] == 'workshop1 init'
+
+    @patch('auth.get_supabase')
+    def test_list_workshops_filtered_by_multiple_skills(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN workshops are associated with different skills
+        WHEN the /workshops endpoint is filtered by multiple skills
+        THEN it should return workshops associated with any of those skills.
+        """
+        # Arrange
+        participant = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, participant)
+
+        # Act
+        response = client.get('/workshops?skill=python&skill=javascript', headers={'Authorization': f'Bearer {FAKE_JWT}'})
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert len(data) == 2
+        workshop_ids = {w['id'] for w in data}
+        assert workshop_ids == {1, 2}  # workshop1 (python), workshop2 (javascript)
+
+    @patch('auth.get_supabase')
+    def test_list_workshops_filtered_by_nonexistent_skill(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN workshops exist
+        WHEN the /workshops endpoint is filtered by a skill that no workshop has
+        THEN it should return an empty list.
+        """
+        # Arrange
+        participant = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, participant)
+
+        # Act
+        response = client.get('/workshops?skill=nonexistent', headers={'Authorization': f'Bearer {FAKE_JWT}'})
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data == []
+
+
+class TestGetWorkshop:
+    """Tests for the GET /workshops/{id} endpoint."""
+
+    @patch('auth.get_supabase')
+    def test_get_workshop_with_leader_and_registrations(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a workshop with an assigned leader and registrations
+        WHEN its details are requested
+        THEN the response should contain all workshop details, leader info, and correct vacancy count.
+        """
+        # Arrange
+        participant = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, participant)
+
+        workshop_id = 1
+        leader = db.session.get(Users, 2)
+
+        # Act
+        response = client.get(f'/workshops/{workshop_id}', headers={'Authorization': f'Bearer {FAKE_JWT}'})
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+
+        assert data['id'] == workshop_id
+        assert data['title'] == 'workshop1 init'
+        assert data['capacity'] == 10
+        assert data['vacant'] == 9  # 10 capacity, 1 registered
+
+        assert 'leaders' in data
+        assert len(data['leaders']) == 1
+        leader_data = data['leaders'][0]
+        assert leader_data['id'] == leader.UserId
+        assert leader_data['name'] == leader.Name
+        assert leader_data['job_title'] == leader.JobTitle
+        assert leader_data['linkedin_url'] == leader.LinkedinUrl
+        assert leader_data['image_url'] == leader.ImageUrl
+        assert leader_data['avatar_url'] == leader.AvatarUrl
+
+    @patch('auth.get_supabase')
+    def test_get_workshop_with_no_leader(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN a workshop with no assigned leader
+        WHEN its details are requested
+        THEN the response should contain workshop details with an empty leaders list.
+        """
+        # Arrange
+        participant = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, participant)
+        workshop_id = 3  # workshop3 has no leader and 1 registration
+
+        # Act
+        response = client.get(f'/workshops/{workshop_id}', headers={'Authorization': f'Bearer {FAKE_JWT}'})
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+
+        assert data['id'] == workshop_id
+        assert data['title'] == 'workshop3 init'
+        assert data['capacity'] == 15
+        assert data['vacant'] == 14  # 15 capacity, 1 registered
+        assert data['leaders'] == []
+
+    @patch('auth.get_supabase')
+    def test_get_non_existent_workshop(self, mock_get_supabase, client, init_database):
+        """
+        GIVEN an authenticated user
+        WHEN they request a workshop with a non-existent ID
+        THEN they should receive a 404 Not Found error.
+        """
+        # Arrange
+        participant = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, participant)
+
+        # Act
+        response = client.get('/workshops/9999', headers={'Authorization': f'Bearer {FAKE_JWT}'})
+
+        # Assert
+        assert response.status_code == 404
+
+
 class TestUserProfile:
     """Tests the user profile endpoint."""
 
@@ -723,6 +908,10 @@ class TestUserSkills:
         user_skills_in_db = UserSkill.query.filter_by(UserId=user.UserId).all()
         assert len(user_skills_in_db) == 2
 
+        # check HasFilledSkillsQuestionnaire is set
+        assert user.HasFilledSkillsQuestionnaire == True
+
+
     @patch('auth.get_supabase')
     def test_replace_existing_skills(self, mock_get_supabase, client, init_database):
         """
@@ -759,6 +948,9 @@ class TestUserSkills:
         assert len(user_skills_in_db) == 1
         assert user_skills_in_db[0].skill.Name == 'javascript'
         assert user_skills_in_db[0].Grade == 5
+
+        # check HasFilledSkillsQuestionnaire is set
+        assert user.HasFilledSkillsQuestionnaire == True
 
     @patch('auth.get_supabase')
     def test_set_empty_list_clears_skills(self, mock_get_supabase, client, init_database):
