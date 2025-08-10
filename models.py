@@ -113,7 +113,7 @@ class Workshop(db.Model):
     DurationMin = db.Column(db.Integer, nullable=False)
     MaxCapacity = db.Column(db.Integer, nullable=False)
     Prerequisite = db.Column(db.Text, nullable=False, default="")
-    Installetion = db.Column(db.Text, nullable=False, default="")
+    Installation = db.Column(db.Text, nullable=False, default="")
 
     # Relationships
     registrations = db.relationship('Registration', back_populates='workshop')
@@ -154,7 +154,7 @@ class Registration(db.Model):
     RegistrationId = db.Column(db.Integer, primary_key=True, autoincrement=True)
     WorkshopId = db.Column(db.Integer, db.ForeignKey('Workshop.WorkshopId'), nullable=False)
     UserId = db.Column(db.Integer, db.ForeignKey('Users.UserId'), nullable=False)
-    RegisteredAt = db.Column(db.Text, nullable=False, default=db.text("datetime('now')"))
+    RegisteredAt = db.Column(db.DateTime, nullable=False, default=db.func.now())
     Status = db.Column(db.Enum(RegistrationStatus), nullable=False)
 
     # Relationships

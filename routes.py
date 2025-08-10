@@ -83,6 +83,46 @@ def init_routes(app: Flask):
                 'note': 'Debug endpoint - disabled in production'
             })
 
+        @app.route('/debug/registrations/<int:w_id>', methods=['GET'])
+        @require_auth
+        def debug_workshop_registrations(w_id):
+            """Debug endpoint to check registrations for a workshop. Only available when DEBUG=True."""
+            user = request.local_user
+            
+            # Check if workshop exists
+            workshop = Workshop.query.get(w_id)
+            if not workshop:
+                return jsonify({'error': 'Workshop not found'}), 404
+            
+            # Get user's registration for this workshop
+            user_registration = Registration.query.filter_by(
+                UserId=user.UserId,
+                WorkshopId=w_id
+            ).first()
+            
+            # Get all registrations for this workshop
+            all_registrations = Registration.query.filter_by(WorkshopId=w_id).all()
+            
+            return jsonify({
+                'debug_mode': True,
+                'workshop': {
+                    'id': workshop.WorkshopId,
+                    'title': workshop.Title,
+                    'capacity': workshop.MaxCapacity
+                },
+                'user_registration': {
+                    'exists': user_registration is not None,
+                    'status': user_registration.Status.value if user_registration else None,
+                    'registered_at': user_registration.RegisteredAt.isoformat() if user_registration else None
+                } if user_registration else None,
+                'total_registrations': len(all_registrations),
+                'registration_breakdown': {
+                    'registered': len([r for r in all_registrations if r.Status == RegistrationStatus.REGISTERED]),
+                    'waitlisted': len([r for r in all_registrations if r.Status == RegistrationStatus.WAITLISTED]),
+                    'cancelled': len([r for r in all_registrations if r.Status == RegistrationStatus.CANCELLED])
+                }
+            })
+
     @app.route('/auth/google/url', methods=['GET', 'POST'])
     def get_google_oauth_url():
         """Generate Google OAuth URL for frontend authentication."""
@@ -343,20 +383,29 @@ def init_routes(app: Flask):
         registered_workshop_ids = []
         waitlisted_workshop_ids = []
         for reg in user.registrations:
+            # Safety check: skip None registrations (corrupted data)
+            if reg is None:
+                app.logger.warning(f"Found None registration for user {user.UserId} ({user.Email})")
+                continue
+            
             if reg.Status == RegistrationStatus.REGISTERED:
                 registered_workshop_ids.append(reg.WorkshopId)
             elif reg.Status == RegistrationStatus.WAITLISTED:
                 waitlisted_workshop_ids.append(reg.WorkshopId)
 
         # skills
-        skills_data = [
-            {
+        skills_data = []
+        for user_skill in user.skills:
+            # Safety check: skip None user_skills or skills (corrupted data)
+            if user_skill is None or user_skill.skill is None:
+                app.logger.warning(f"Found None user_skill or skill for user {user.UserId} ({user.Email})")
+                continue
+            
+            skills_data.append({
                 'id': user_skill.skill.SkillId,
                 'name': user_skill.skill.Name,
                 'grade': user_skill.Grade
-            }
-            for user_skill in user.skills
-        ]
+            })
 
         return jsonify({
             'UserId': user.UserId,
@@ -535,7 +584,7 @@ def init_routes(app: Flask):
                 'durationMin': w.DurationMin,
                 'vacant': vacant,
                 'prerequisite': w.Prerequisite,
-                'installetion': w.Installetion
+                'installation': w.Installation
             })
         return jsonify(result)
 
@@ -556,7 +605,7 @@ def init_routes(app: Flask):
             'durationMin': w.DurationMin,
             'vacant': vacant,
             'prerequisite': w.Prerequisite,
-            'installetion': w.Installetion
+            'installation': w.Installation
         })
 
     @app.route('/workshops', methods=['POST'])
@@ -774,10 +823,36 @@ def init_routes(app: Flask):
     @require_auth
     def unregister_to_workshop(w_id):
         user = request.local_user
+        
+        # Check if workshop exists first
+        workshop = Workshop.query.get(w_id)
+        if not workshop:
+            return jsonify({'error': 'Workshop not found'}), 404
+        
+        # Check for any registration for this user and workshop
+        any_registration = Registration.query.filter_by(
+            UserId=user.UserId,
+            WorkshopId=w_id
+        ).first()
+        
+        if not any_registration:
+            return jsonify({
+                'error': 'No registration found',
+                'message': f'You are not registered for workshop {w_id}'
+            }), 404
+        
+        # Check if registration is in a cancellable state
         registration = Registration.query.filter_by(
             UserId=user.UserId,
             WorkshopId=w_id
-        ).filter(Registration.Status.in_([RegistrationStatus.REGISTERED, RegistrationStatus.WAITLISTED])).first_or_404()
+        ).filter(Registration.Status.in_([RegistrationStatus.REGISTERED, RegistrationStatus.WAITLISTED])).first()
+        
+        if not registration:
+            return jsonify({
+                'error': 'Cannot cancel registration',
+                'message': f'Your registration status is "{any_registration.Status.value}" and cannot be cancelled',
+                'current_status': any_registration.Status.value
+            }), 400
 
         old_status = registration.Status
         registration.Status = RegistrationStatus.CANCELLED

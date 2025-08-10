@@ -40,12 +40,12 @@ def create_app(config_object=None):
     # Remove duplicates while preserving order
     cors_origins = list(dict.fromkeys(cors_origins))
     
-    # Configure CORS with all HTTP methods support
+    # Configure CORS with maximum compatibility
     CORS(app, 
-         origins=cors_origins, 
-         supports_credentials=True,
-         methods="*",  # Allow all HTTP methods (GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD, etc.)
-         allow_headers=['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+         origins="*",  # Allow all origins (TEMPORARY FOR DEBUGGING)
+         supports_credentials=False,  # Must be False when origins="*"
+         methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+         allow_headers="*",  # Allow ALL headers to avoid case sensitivity issues
          expose_headers=['Content-Range', 'X-Content-Range'])
 
     # Initialize database with connection pool settings if configured
