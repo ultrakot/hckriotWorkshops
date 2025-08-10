@@ -54,8 +54,8 @@ class Users(db.Model):
     JobTitle = db.Column(db.Text, nullable=True, default="")
 
     # Relationships
-    registrations = db.relationship('Registration', back_populates='user')
-    skills = db.relationship('UserSkill', back_populates='user')
+    registrations = db.relationship('Registration', back_populates='user', lazy='selectin')
+    skills = db.relationship('UserSkill', back_populates='user', lazy='selectin')
     led_workshops = db.relationship('WorkshopLeader', back_populates='leader')
 
     # Role checking methods

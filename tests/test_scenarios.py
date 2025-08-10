@@ -134,6 +134,17 @@ def init_database(app):
         db.drop_all()
 
 
+@pytest.fixture(autouse=True)
+def disable_prereq_check_by_default(monkeypatch):
+    """
+    Turns off the prerequisite check for all tests by default.
+    This ensures tests for other features (like waitlisting) are not
+    affected by skill requirements. Tests that need this feature on
+    must explicitly enable it.
+    """
+    monkeypatch.setattr('routes.ENFORCE_WORKSHOP_PREREQUISITES', False)
+
+
 def mock_authed_user(mock_get_supabase, user: Users):
     """Helper function to set up the mock for an authenticated user."""
     # mock Supabase `gotrue.models.User` object
@@ -867,6 +878,66 @@ class TestWorkshopRegistration:
         # Verify in the database that the user's status is now REGISTERED.
         final_reg = Registration.query.filter_by(UserId=user2.UserId, WorkshopId=workshop_id).one()
         assert final_reg.Status == RegistrationStatus.REGISTERED
+
+    @patch('auth.get_supabase')
+    def test_register_fails_if_missing_skills(self, mock_get_supabase, client, init_database, monkeypatch):
+        """
+        GIVEN prerequisite checks are enabled and a user is missing required skills
+        WHEN they try to register for a workshop
+        THEN they should receive a 403 Forbidden error with a list of missing skills.
+        """
+        # Arrange
+        # Enable prerequisite check specifically for this test.
+        monkeypatch.setattr('routes.ENFORCE_WORKSHOP_PREREQUISITES', True)
+
+        # The user (ID 4) does not have the 'javascript' skill required for workshop 2.
+        user_missing_skill = db.session.get(Users, 4)
+        mock_authed_user(mock_get_supabase, user_missing_skill)
+        workshop_id = 2  # Requires 'javascript'
+
+        # Act
+        response = client.post(
+            f'/workshops/{workshop_id}/register',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'}
+        )
+
+        # Assert
+        assert response.status_code == 403
+        data = response.get_json()
+        assert data['error'] == 'Prerequisites not met'
+        assert 'missing_skills' in data
+        assert data['missing_skills'] == ['javascript']
+
+    @patch('auth.get_supabase')
+    def test_register_succeeds_if_has_skills(self, mock_get_supabase, client, init_database, monkeypatch):
+        """
+        GIVEN prerequisite checks are enabled and a user has the required skills
+        WHEN they try to register for a workshop
+        THEN they should be successfully registered.
+        """
+        # Arrange
+        # Enable prerequisite check specifically for this test.
+        monkeypatch.setattr('routes.ENFORCE_WORKSHOP_PREREQUISITES', True)
+
+        # The user (ID 3) has the 'python' skill required for workshop 1.
+        user_with_skill = db.session.get(Users, 3)
+        mock_authed_user(mock_get_supabase, user_with_skill)
+        workshop_id = 1  # Requires 'python'
+
+        # Clean up existing registration from the fixture to test a fresh one
+        Registration.query.filter_by(UserId=user_with_skill.UserId, WorkshopId=workshop_id).delete()
+        db.session.commit()
+
+        # Act
+        response = client.post(
+            f'/workshops/{workshop_id}/register',
+            headers={'Authorization': f'Bearer {FAKE_JWT}'}
+        )
+
+        # Assert
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['status'] == 'Signed up successfully'
 
 
 class TestUserSkills:

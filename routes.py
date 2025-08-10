@@ -12,7 +12,7 @@ from models import db, Workshop, Registration, WorkshopSkill, Skill, UserSkill, 
 from config import Config
 
 ALLOWED_OVERLAP = timedelta(minutes=1)
-
+ENFORCE_WORKSHOP_PREREQUISITES = True
 
 def init_routes(app: Flask):
     @app.route('/')
@@ -565,13 +565,24 @@ def init_routes(app: Flask):
     @app.route('/workshops/<int:w_id>', methods=['GET'])
     @require_auth
     def get_workshop(w_id):
-        # load leaders and their user details
-        w = Workshop.query.options(
-            joinedload(Workshop.leaders)
-        ).filter_by(WorkshopId=w_id).first_or_404()
+        # --- Optimization: Fetch workshop, leaders, and registration count in one query ---
+        registered_counts_subquery = db.session.query(
+            func.count(Registration.RegistrationId).label('registered_count')
+        ).filter(
+            Registration.WorkshopId == w_id,
+            Registration.Status == RegistrationStatus.REGISTERED
+        ).scalar_subquery()
 
-        # Count registered users
-        registered_count = _get_registered_count(w_id)
+        result = db.session.query(
+            Workshop,
+            func.coalesce(registered_counts_subquery, 0).label('registered_count')
+        ).options(
+            joinedload(Workshop.leaders)  # Eagerly load leaders
+        ).filter(
+            Workshop.WorkshopId == w_id
+        ).first_or_404()
+
+        w, registered_count = result
         vacant = w.MaxCapacity - registered_count
 
         # Create a list of all leaders for the workshop
@@ -751,6 +762,30 @@ def init_routes(app: Flask):
     def register_to_workshop(w_id):
         w = Workshop.query.get_or_404(w_id, description='Workshop not found')
         user = request.local_user
+
+        # --- Prerequisite Skills Check ---
+        if ENFORCE_WORKSHOP_PREREQUISITES:
+            # Get required skill IDs for the workshop
+            required_skill_ids = {ws.skill.SkillId for ws in w.skills}
+
+            if required_skill_ids:  # Only check if there are prerequisites
+                # Get user's skill IDs
+                user_skill_ids = {us.skill.SkillId for us in user.skills}
+
+                # Find missing skills
+                missing_skill_ids = required_skill_ids - user_skill_ids
+
+                if missing_skill_ids:
+                    # Get names of missing skills for a better error message
+                    missing_skills = Skill.query.filter(Skill.SkillId.in_(missing_skill_ids)).all()
+                    missing_skill_names = [s.Name for s in missing_skills]
+                    app.logger.info(
+                        f"User {user.UserId} ({user.Email}) registration to workshop {w_id} blocked, reason: missing skills: {missing_skill_names}.")
+                    return jsonify({
+                        'error': 'Prerequisites not met',
+                        'message': 'You are missing the following required skills to register for this workshop.',
+                        'missing_skills': missing_skill_names
+                    }), 403
 
         # Check for any existing registration (any status)
         existing_registration = Registration.query.filter_by(UserId=user.UserId, WorkshopId=w_id).first()
