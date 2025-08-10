@@ -5,13 +5,14 @@ from urllib.parse import urlencode, urlparse
 
 from flask import Flask, request, jsonify, abort
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 
 from auth import require_auth
 from models import db, Workshop, Registration, WorkshopSkill, Skill, UserSkill, RegistrationStatus
 from config import Config
 
 ALLOWED_OVERLAP = timedelta(minutes=1)
-
+ENFORCE_WORKSHOP_PREREQUISITES = True
 
 def init_routes(app: Flask):
     @app.route('/')
@@ -368,7 +369,8 @@ def init_routes(app: Flask):
                 'registered': registered_workshop_ids,
                 'waitlisted': waitlisted_workshop_ids
             },
-            'skills': skills_data
+            'skills': skills_data,
+            'has_filled_skills_questionnaire': user.HasFilledSkillsQuestionnaire or (len(skills_data) > 0)
         })
 
     #########################  skills
@@ -426,6 +428,8 @@ def init_routes(app: Flask):
             if new_user_skills:
                 db.session.bulk_insert_mappings(UserSkill, new_user_skills)
 
+            user.HasFilledSkillsQuestionnaire = True
+
             db.session.commit()
             app.logger.info(
                 f"User {user.UserId} ({user.Email}) updated their skills. New count: {len(new_user_skills)}.")
@@ -464,7 +468,8 @@ def init_routes(app: Flask):
     @require_auth
     def add_skill():
         """
-        Add a new possible skill to the database. Requires ADMIN role.
+        Add a new possible skill to the database.
+        Requires ADMIN role.
         """
         user = request.local_user
         if not user.is_admin():
@@ -511,42 +516,85 @@ def init_routes(app: Flask):
     @app.route('/workshops', methods=['GET'])
     @require_auth
     def list_workshops():
+        """
+        List all workshops, with an efficient count of vacant spots.
+        Can be filtered by skill(s) by passing `?skill=python&skill=javascript`.
+        """
+        # subquery to count registered users for each workshop.
+        # computes all counts in a single database operation.
+        registered_counts_subquery = db.session.query(
+            Registration.WorkshopId.label('w_id'),
+            func.count(Registration.RegistrationId).label('registered_count')
+        ).filter(
+            Registration.Status == RegistrationStatus.REGISTERED
+        ).group_by(
+            Registration.WorkshopId
+        ).subquery()
+
+        # main query, joining Workshop with the counts subquery.
+        #    - `outerjoin` ensures workshops with 0 registrations are included.
+        #    - `func.coalesce` converts NULL counts (for workshops with 0 regs) to 0.
+        query = db.session.query(
+            Workshop,
+            func.coalesce(registered_counts_subquery.c.registered_count, 0).label('registered_count')
+        ).outerjoin(
+            registered_counts_subquery,
+            Workshop.WorkshopId == registered_counts_subquery.c.w_id
+        )
+
+        # optional skill filter
         skills = request.args.getlist('skill')
         if skills:
-            # Filter by skills - join Workshop -> WorkshopSkill -> Skill
-            workshops = Workshop.query.join(WorkshopSkill).join(Skill).filter(Skill.Name.in_(skills)).all()
-        else:
-            workshops = Workshop.query.all()
+            query = query.join(WorkshopSkill).join(Skill).filter(Skill.Name.in_(skills))
 
-        result = []
-        for w in workshops:
-            # Count registered users (not waitlisted or cancelled)
-            registered_count = Registration.query.filter_by(
-                WorkshopId=w.WorkshopId,
-                Status=RegistrationStatus.REGISTERED
-            ).count()
-            vacant = w.MaxCapacity - registered_count
-
-            result.append({
+        result = [
+            {
                 'id': w.WorkshopId,
                 'title': w.Title,
                 'description': w.Description,
                 'startTime': w.SessionDateTime.strftime('%H:%M'),
                 'durationMin': w.DurationMin,
-                'vacant': vacant,
+                'vacant': w.MaxCapacity - registered_count,
                 'prerequisite': w.Prerequisite,
-                'installetion': w.Installetion
-            })
+                'installations': w.RequiredInstallations
+            }
+            for w, registered_count in query.all()
+        ]
         return jsonify(result)
 
     @app.route('/workshops/<int:w_id>', methods=['GET'])
     @require_auth
     def get_workshop(w_id):
-        w = Workshop.query.get_or_404(w_id)
+        # --- Optimization: Fetch workshop, leaders, and registration count in one query ---
+        registered_counts_subquery = db.session.query(
+            func.count(Registration.RegistrationId).label('registered_count')
+        ).filter(
+            Registration.WorkshopId == w_id,
+            Registration.Status == RegistrationStatus.REGISTERED
+        ).scalar_subquery()
 
-        # Count registered users
-        registered_count = _get_registered_count(w_id)
+        result = db.session.query(
+            Workshop,
+            func.coalesce(registered_counts_subquery, 0).label('registered_count')
+        ).options(
+            joinedload(Workshop.leaders)  # Eagerly load leaders
+        ).filter(
+            Workshop.WorkshopId == w_id
+        ).first_or_404()
+
+        w, registered_count = result
         vacant = w.MaxCapacity - registered_count
+
+        # Create a list of all leaders for the workshop
+        leaders_info = [
+            {
+                'id': wl.leader.UserId,
+                'name': wl.leader.Name,
+                'avatar_url': wl.leader.AvatarUrl,
+                'job_title': wl.leader.JobTitle,
+            }
+            for wl in w.leaders
+        ]
 
         return jsonify({
             'id': w.WorkshopId,
@@ -555,8 +603,10 @@ def init_routes(app: Flask):
             'startTime': w.SessionDateTime.strftime('%H:%M'),
             'durationMin': w.DurationMin,
             'vacant': vacant,
+            'capacity': w.MaxCapacity,
             'prerequisite': w.Prerequisite,
-            'installetion': w.Installetion
+            'installations': w.RequiredInstallations,
+            'leaders': leaders_info
         })
 
     @app.route('/workshops', methods=['POST'])
@@ -712,6 +762,30 @@ def init_routes(app: Flask):
     def register_to_workshop(w_id):
         w = Workshop.query.get_or_404(w_id, description='Workshop not found')
         user = request.local_user
+
+        # --- Prerequisite Skills Check ---
+        if ENFORCE_WORKSHOP_PREREQUISITES:
+            # Get required skill IDs for the workshop
+            required_skill_ids = {ws.skill.SkillId for ws in w.skills}
+
+            if required_skill_ids:  # Only check if there are prerequisites
+                # Get user's skill IDs
+                user_skill_ids = {us.skill.SkillId for us in user.skills}
+
+                # Find missing skills
+                missing_skill_ids = required_skill_ids - user_skill_ids
+
+                if missing_skill_ids:
+                    # Get names of missing skills for a better error message
+                    missing_skills = Skill.query.filter(Skill.SkillId.in_(missing_skill_ids)).all()
+                    missing_skill_names = [s.Name for s in missing_skills]
+                    app.logger.info(
+                        f"User {user.UserId} ({user.Email}) registration to workshop {w_id} blocked, reason: missing skills: {missing_skill_names}.")
+                    return jsonify({
+                        'error': 'Prerequisites not met',
+                        'message': 'You are missing the following required skills to register for this workshop.',
+                        'missing_skills': missing_skill_names
+                    }), 403
 
         # Check for any existing registration (any status)
         existing_registration = Registration.query.filter_by(UserId=user.UserId, WorkshopId=w_id).first()
@@ -877,10 +951,10 @@ def _check_for_registration_overlap(user_id: int, target_workshop: Workshop) -> 
 
     # Get all user's other active registrations
     # (join to be able to filter and access workshop properties)
-    existing_registrations = Registration.query.join(Workshop).filter(
+    existing_registrations = Registration.query.filter(
         Registration.UserId == user_id,
         Registration.Status == RegistrationStatus.REGISTERED,
-        Workshop.WorkshopId != target_workshop.WorkshopId
+        Registration.WorkshopId != target_workshop.WorkshopId
     ).all()
 
     # check for time collision
