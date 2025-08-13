@@ -576,6 +576,9 @@ def init_routes(app: Flask):
             ).count()
             vacant = w.MaxCapacity - registered_count
 
+            # Fetch skill names for the workshop
+            skill_names = [ws.skill.Name for ws in w.skills]
+
             result.append({
                 'id': w.WorkshopId,
                 'title': w.Title,
@@ -584,7 +587,10 @@ def init_routes(app: Flask):
                 'durationMin': w.DurationMin,
                 'vacant': vacant,
                 'prerequisite': w.Prerequisite,
-                'installation': w.Installation
+                'installation': w.Installation,
+                "leaderName": w.LeaderName,  
+                "leaderTitle": w.LeaderTitle,  
+                "skills": skill_names  
             })
         return jsonify(result)
 
@@ -597,6 +603,9 @@ def init_routes(app: Flask):
         registered_count = _get_registered_count(w_id)
         vacant = w.MaxCapacity - registered_count
 
+        # Fetch skill names for the workshop
+        skill_names = [ws.skill.Name for ws in w.skills]
+
         return jsonify({
             'id': w.WorkshopId,
             'title': w.Title,
@@ -605,7 +614,10 @@ def init_routes(app: Flask):
             'durationMin': w.DurationMin,
             'vacant': vacant,
             'prerequisite': w.Prerequisite,
-            'installation': w.Installation
+            'installation': w.Installation,
+            "leaderName": w.LeaderName,  
+            "leaderTitle": w.LeaderTitle,  
+            "skills": skill_names  
         })
 
     @app.route('/workshops', methods=['POST'])

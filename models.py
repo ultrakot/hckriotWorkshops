@@ -48,7 +48,7 @@ class Users(db.Model):
     # Relationships
     registrations = db.relationship('Registration', back_populates='user')
     skills = db.relationship('UserSkill', back_populates='user')
-    led_workshops = db.relationship('WorkshopLeader', back_populates='leader')
+    #led_workshops = db.relationship('WorkshopLeader', back_populates='leader')
 
     # Role checking methods
     def has_role_level(self, min_role):
@@ -63,23 +63,23 @@ class Users(db.Model):
         """Check if user is admin"""
         return self.Role == UserRole.ADMIN
 
-    def is_workshop_leader_for(self, workshop_id):
-        """Check if user is a leader for a specific workshop"""
-        return db.session.query(WorkshopLeader).filter_by(
-            LeaderId=self.UserId,
-            WorkshopId=workshop_id
-        ).first() is not None
+    # def is_workshop_leader_for(self, workshop_id):
+    #     """Check if user is a leader for a specific workshop"""
+    #     return db.session.query(WorkshopLeader).filter_by(
+    #         LeaderId=self.UserId,
+    #         WorkshopId=workshop_id
+    #     ).first() is not None
 
     def can_manage_workshop(self, workshop_id):
         """Check if user can manage a specific workshop (admin or assigned leader)"""
         return self.is_admin() or self.is_workshop_leader_for(workshop_id)
 
     # other methods
-    def get_led_workshops(self):
-        """Get all workshops this user leads"""
-        return db.session.query(Workshop).join(WorkshopLeader).filter(
-            WorkshopLeader.LeaderId == self.UserId
-        ).all()
+    # def get_led_workshops(self):
+    #     """Get all workshops this user leads"""
+    #     return db.session.query(Workshop).join(WorkshopLeader).filter(
+    #         WorkshopLeader.LeaderId == self.UserId
+    #     ).all()
 
 
 class Skill(db.Model):
@@ -114,23 +114,12 @@ class Workshop(db.Model):
     MaxCapacity = db.Column(db.Integer, nullable=False)
     Prerequisite = db.Column(db.Text, nullable=False, default="")
     Installation = db.Column(db.Text, nullable=False, default="")
+    LeaderName = db.Column(db.Text, nullable=True)  # Single text column for leader
+    LeaderTitle = db.Column(db.Text, nullable=True)  # Single text column for leader title
 
     # Relationships
     registrations = db.relationship('Registration', back_populates='workshop')
     skills = db.relationship('WorkshopSkill', back_populates='workshop')
-    leaders = db.relationship('WorkshopLeader', back_populates='workshop')
-
-
-class WorkshopLeader(db.Model):
-    __tablename__ = 'WorkshopLeader'
-    # composite key
-    WorkshopId = db.Column(db.Integer, db.ForeignKey('Workshop.WorkshopId'), primary_key=True, index=True)
-    LeaderId = db.Column(db.Integer, db.ForeignKey('Users.UserId'), primary_key=True, index=True)
-    AssignedAt = db.Column(db.Text, nullable=False, default=db.text("datetime('now')"))
-
-    # Relationships
-    workshop = db.relationship('Workshop', back_populates='leaders')
-    leader = db.relationship('Users', back_populates='led_workshops')
 
 
 class WorkshopSkill(db.Model):
